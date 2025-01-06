@@ -1,0 +1,47 @@
+### default supported ROS message types:
+# visualization_msgs/MarkerArray
+# nav_msgs/Odometry
+# std_msgs/String
+# (modify/add in include/msgs_macro.hpp if you need more)
+
+### list all <IPname: IP> here (IPname can be set arbitrarily) ###
+IP:
+  all: '*'                         # '*' stands for all IPs
+  all_drone: 'all_drone'           # all drone, not include station
+  groundStation: 192.168.100.67    # laptop (grond station)
+  # drone0: 192.168.100.124          # drone 0
+  drone0: 192.168.100.125          # drone 1
+  drone1: 192.168.100.126          # drone 2
+
+
+config:
+  debug: false                    # recv msg that i send for debugging
+  odom_convert: true              # convert odom to posestamped using odom_convert_node
+  monitor_node: true              # check recv rate
+  warn_threshold: 3               # if recv rate smaller than max_freq-warn_threashold, then warn
+  monitor_rate_hz: 500            # it must be greater than max_freq
+  
+topics:
+- topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
+  msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
+  srcIP: 
+  - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
+  srcPort: 3001                   # ports of send_topics should be different
+  max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
+  dstIP: 
+  - groundStation0                # recv devices
+  - groundStation1
+  prefix: true                    # add namespace prefix, default: true
+  same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
+
+- topic_name: /drone_{id}_ego_planner_node/optimal_list  # keyword {id} will be replaced by drone id
+  msg_type: visualization_msgs/Marker     
+  srcIP: 
+  - all_drone                       
+  srcPort: 3002                  
+  max_freq: 30
+  dstIP: 
+  - groundStation0
+  - groundStation1
+  prefix: false                   
+

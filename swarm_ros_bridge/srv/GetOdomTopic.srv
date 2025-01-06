@@ -1,0 +1,5 @@
+string[] topic_name
+string[] convert_type
+string[] raw_topic_name
+---
+int32 none

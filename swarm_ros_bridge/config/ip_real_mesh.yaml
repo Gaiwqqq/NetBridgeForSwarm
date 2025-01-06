@@ -1,0 +1,23 @@
+IP:
+  all: '*'                         # '*' stands for all IPs
+  all_drone: 'all_drone'           # all drone, not include station
+  groundStation0: 192.168.100.41   # laptop (grond station)
+  drone0: 192.168.166.124        # drone  zld-13
+  drone1: 192.168.166.127        # drone  zld-13
+  drone2: 192.168.166.125        # drone  zld-13
+  drone3: 192.168.166.132        # drone  zld-13
+  drone4: 192.168.166.111        # drone  zld-13
+  drone5: 192.168.166.133        # drone  zld-13
+  drone6: 192.168.166.135        # drone  zld-13
+  drone7: 192.168.166.105        # drone  zld-13
+  drone8: 192.168.166.128        # drone  zld-13
+  drone9: 192.168.166.123        # drone  zld-13
+  drone10: 192.168.166.145        # drone  zld-13
+  # drone2: 192.168.100.126        # drone  zld-12
+  # drone3: 192.168.100.125        # drone  zld-5
+  # drone4: 192.168.100.111        # drone  zdf-1
+  # drone5: 192.168.100.133        # drone  zld-13
+  # drone6: 192.168.100.135        # drone  zld-15
+  # drone7: 192.168.100.105        # drone  zdf1 zan shi
+  # drone7: 192.168.100.105        # drone  zsf-5
+

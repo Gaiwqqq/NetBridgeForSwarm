@@ -1,0 +1,74 @@
+config:
+  debug: false                    # for debug only
+  odom_convert: true              # convert odom to posestamped using odom_convert_node
+  monitor_node: true              # check recv rate
+  warn_threshold: 3               # if recv rate smaller than max_freq-warn_threashold, then warn
+  monitor_rate_hz: 500            # it must be greater than max_freq
+
+services:
+  # --------- Services ---------- #
+  - srv_name: /add_two_ints
+    srv_type: swarm_ros_bridge/AddTwoInts
+    serverIp: drone1
+    clientIp:
+      - drone2
+    srcPort: 2000
+    prefix: true
+
+topics:
+  # ---------- Topics ---------- #
+  - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
+    msg_type: visualization_msgs/MarkerArray
+    srcIP:
+      - drone1
+    srcPort: 3001
+    max_freq: 20
+    dstIP:
+      - drone2
+    prefix: true
+    same_prefix: true
+
+  - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
+    msg_type: sensor_msgs/PointCloud2
+    srcIP:
+      - drone1
+    srcPort: 3002
+    max_freq: 5
+    dstIP:
+      - drone2
+    prefix: true
+    same_prefix: true
+
+  - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
+    msg_type: sensor_msgs/PointCloud2
+    srcIP:
+      - drone1
+    srcPort: 3003
+    max_freq: 5
+    dstIP:
+      - drone2
+    prefix: true
+    same_prefix: true
+
+  - topic_name: /ekf_quat/ekf_odom
+    msg_type: nav_msgs/Odometry
+    srcIP:
+      - drone1
+    srcPort: 3004
+    max_freq: 30
+    dstIP:
+      - drone2
+    prefix: true
+    same_prefix: true
+
+  - topic_name: /camera/color/image_raw
+    msg_type: sensor_msgs/Image
+    imgResizeRate: 0.5
+    srcIP:
+      - groundStation0
+    srcPort: 3005
+    max_freq: 24
+    dstIP:
+      - drone1
+    prefix: true
+    same_prefix: false

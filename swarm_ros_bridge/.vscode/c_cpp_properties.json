@@ -1,0 +1,47 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/opt/ros/noetic/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/devel/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_target/DecompROS/decomp_ros_utils/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/real_flight_modules/drone_node/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/ego_plannerv3/plan_manage/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/real_flight_modules/ekf_quat_pose/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_target/fake_mapping/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_target/fake_target_planning/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_target/fake_traj_opt/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/real_flight_modules/FAST_LIO/thirdparty/fast_gicp/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/local_sensing/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/ego_plannerv3/map_interface/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/mission_fsm/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/mockamap/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/ego_plannerv3/path_searching/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/perception_utils/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/ego_plannerv3/plan_env/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/pose_utils/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/quadrotor_msgs/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/selected_points_publisher/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/so3_control/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_so3_controller/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/fake_so3_quadrotor/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/uav_simulator/so3_quadrotor_simulator/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/network/swarm_ros_bridge/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/planner/ego_plannerv3/traj_opt/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/traj_utils/include/**",
+        "/home/gwq/BUAA/ws_gdrone250/src/Gdrone250Software/utils/uav_utils/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

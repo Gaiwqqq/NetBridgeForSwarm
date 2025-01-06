@@ -1,0 +1,10 @@
+IP:
+  all: '*'                          # '*' stands for all IPs
+  all_drone: 'all_drone'            # all drone, not include station
+  groundStation0: 172.16.0.200      # laptop (grond station)
+  drone0: 172.16.0.100              # drone 0 zld-4
+  drone1: 172.16.0.101              # drone 1 zld-4
+  drone2: 172.16.0.102              # drone 2 zld-4
+  drone3: 172.16.0.103              # drone 3 zld-4
+  drone4: 172.16.0.104              # drone 4 zld-4
+

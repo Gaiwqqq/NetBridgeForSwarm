@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+    <group ns="bridge">
+        <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node_station" output="screen" >
+            <param name="hostname" type="string" value="drone2"/>
+            <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+            <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
+        </node>
+    </group>
+</launch>

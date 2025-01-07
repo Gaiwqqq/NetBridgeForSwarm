@@ -69,7 +69,7 @@ catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
 sudo apt-get install ros-noetic-topic-tools 
 ```
 
-## 2. Uasge
+## 2. Configuration
 
 ### 2.1 Ip configuration
 
@@ -183,7 +183,7 @@ services:
     prefix: true
 ```
 
-## 3. Customize message type
+## 2.4 Customize message type
 
 
 - [中文] 需添加新的自定义消息，需要修改`include/msgs_macro.hpp`，在上方include自定义消息，在`MSGS_MACRO`里按照格式填写，X宏的第一个参数需和yaml文件内的`msg_type`能够对应上
@@ -230,7 +230,9 @@ the include line, and fill in the format in `MSGS_MACRO`. The first parameter of
 
 ```
 
-## 4. Run Simulation In Single PC
+## 3. Run
+
+### 3.1 Single PC simulation
 
 - [中文] 需创建多个虚拟网卡，可用`sh scripts/create_virtual_interface.sh 4`命令创建，参数为无人机的个数，groundStation默认设置
 为`172.16.0.200`，drone0为`172.16.0.100`，drone1为`172.16.0.101`，以此类推。不需要网卡时可用`scripts/delete_virtual_interface.sh`删除网卡，参数同样为无人机的个数
@@ -258,7 +260,23 @@ IP:
         </node>
     </group>
 ```
-## 5. Contributor
+
+### 3.2 Realworld Run
+
+- [中文] 需修改`ip_real.yaml`文件， launch文件的编写方法如下，需要修改载入的yaml文件路径以及自身的识别名
+- [English] To run in realworld, you need to modify the `ip_real.yaml` file. The launch file is as follows, you need to modify the path of the loaded yaml file and the name of the self-recognition.
+
+```xml
+    <group ns="drone$(arg drone_id)">
+        <node pkg="swarm_ros_bridge" type="bridge_node" name="drone$(arg drone_id)_swarm_bridge_node" output="screen" >
+            <param name="hostname" type="string" value="drone$(arg drone_id)" />
+            <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+            <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
+        </node>
+    </group>
+```
+
+## 4. Contributor
 
 - Weiqi Gai 2025.01 
 - KengHou Hoi 2024.08

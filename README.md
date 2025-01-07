@@ -252,13 +252,13 @@ IP:
   drone3: 172.16.0.103
 ```
 ```xml
-    <group ns="drone$(arg drone_id)">
-        <node pkg="swarm_ros_bridge" type="bridge_node" name="drone$(arg drone_id)_swarm_bridge_node" output="screen" >
-            <param name="hostname" type="string" value="drone$(arg drone_id)" />
-            <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
-            <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
-        </node>
-    </group>
+    <group ns="bridge">
+    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen" >
+      <param name="hostname" type="string" value="drone1"/>
+      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+      <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
+    </node>
+</group>
 ```
 
 ### 3.2 Realworld Run
@@ -267,13 +267,13 @@ IP:
 - [English] To run in realworld, you need to modify the `ip_real.yaml` file. The launch file is as follows, you need to modify the path of the loaded yaml file and the name of the self-recognition.
 
 ```xml
-    <group ns="drone$(arg drone_id)">
-        <node pkg="swarm_ros_bridge" type="bridge_node" name="drone$(arg drone_id)_swarm_bridge_node" output="screen" >
-            <param name="hostname" type="string" value="drone$(arg drone_id)" />
-            <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
-            <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
-        </node>
-    </group>
+  <group ns="bridge">
+    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen" >
+      <param name="hostname" type="string" value="drone1"/>
+      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+      <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
+    </node>
+  </group>
 ```
 
 ## 4. Contributor

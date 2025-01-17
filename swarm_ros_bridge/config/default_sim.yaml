@@ -12,6 +12,7 @@ services:
     serverIp: drone1
     clientIp:
       - drone2
+      - drone3
     srcPort: 2000
     prefix: true
 
@@ -25,6 +26,7 @@ topics:
     max_freq: 20
     dstIP:
       - drone2
+      - drone3
     prefix: true
     same_prefix: true
 
@@ -36,6 +38,7 @@ topics:
     max_freq: 5
     dstIP:
       - drone2
+      - drone3
     prefix: true
     same_prefix: true
 
@@ -47,6 +50,7 @@ topics:
     max_freq: 5
     dstIP:
       - drone2
+      - drone3
     prefix: true
     same_prefix: true
 
@@ -58,6 +62,7 @@ topics:
     max_freq: 30
     dstIP:
       - drone2
+      - drone3
     prefix: true
     same_prefix: true
 
@@ -65,10 +70,10 @@ topics:
     msg_type: sensor_msgs/Image
     imgResizeRate: 0.5
     srcIP:
-      - groundStation0
+      - drone1
     srcPort: 3005
     max_freq: 24
     dstIP:
-      - drone1
+      - drone2
     prefix: true
     same_prefix: false

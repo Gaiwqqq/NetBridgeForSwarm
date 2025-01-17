@@ -24,13 +24,17 @@ TopicFactory::TopicFactory(const TopicCfg& topic_cfg,
       for (const auto& dst : topic_cfg_.dst_hostname_map_){
         if (dst.second && dst.first != topic_cfg_.my_hostname_){
           std::unique_ptr<zmqpp::socket> sender_tmp(new zmqpp::socket(context_, zmqpp::socket_type::pub));
-          const std::string url = "tcp://" + ip_map_[dst.first] + ":" + std::to_string(topic_cfg_.port_);
-          sender_->connect(url);
           dynamic_senders_[dst.first] = std::move(sender_tmp);
+          const std::string url = "tcp://" + ip_map_[dst.first] + ":" + std::to_string(topic_cfg_.port_);
+          dynamic_senders_[dst.first]->connect(url);
         }
       }
     }
-    INFO_MSG(" SEND | " << "src -> "<< topic_cfg_.src_hostname_ << (topic_cfg_.src_hostname_map_[topic_cfg_.my_hostname_] ? "(ME) | " : " | ")
+    if (topic_cfg_.dynamic_dst_)
+      INFO_MSG(" SEND DYNAMIC | " << "src -> "<< topic_cfg_.src_hostname_ << (topic_cfg_.src_hostname_map_[topic_cfg_.my_hostname_] ? "(ME) | " : " | ")
+                        << topic_cfg_.name_ << " | " << topic_cfg_.max_freq_ << "Hz");
+    else
+      INFO_MSG(" SEND | " << "src -> "<< topic_cfg_.src_hostname_ << (topic_cfg_.src_hostname_map_[topic_cfg_.my_hostname_] ? "(ME) | " : " | ")
                         << topic_cfg_.name_ << " | " << topic_cfg_.max_freq_ << "Hz");
 
   }else if (send_or_recv == SEND_OR_RECV::RECV){
@@ -130,12 +134,16 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T> &event) {
   /* zmq send message */
   bool dont_block = false; // Actually for PUB mode zmq socket, send() will never block
   if constexpr (has_data_to_drone_ids<T, std::vector<uint8_t>>::value){
+    send_array << data_len;
+    send_array.add_raw(reinterpret_cast<void const *>(send_buffer.get()), data_len);
     for (size_t j = 0; j < msg.to_drone_ids.size(); ++j){
-      send_array << data_len;
-      send_array.add_raw(reinterpret_cast<void const *>(send_buffer.get()), data_len);
       int id = msg.to_drone_ids[j];
       std::string target = "drone" + std::to_string(id);
-      dynamic_senders_[target]->send(send_array, dont_block);
+      if (dynamic_senders_.find(target) != dynamic_senders_.end()) {
+        dynamic_senders_[target]->send(send_array, dont_block);
+      }else{
+        INFO_MSG_RED("[TopicFactory]: to_drone_ids not matched in config file: " << target);
+      }
     }
   }
   else{

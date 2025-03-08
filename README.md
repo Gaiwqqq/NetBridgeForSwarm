@@ -28,7 +28,7 @@ This is a multi-machine communication middleware that can forward messages from 
 #zmqpp 
 sudo apt-get install libzmqpp-dev ros-noetic-topic-tools 
 ```
-- Note that since the cv_bridge depends on opencv, and the default compilation version is the one provided by ros, if you want to use a custom opencv, you need to recompile cv_bridge and replace the cv_bridge_noetic_fit_version package with your own custom opencv version.
+Note that since the cv_bridge depends on opencv, and the default compilation version is the one provided by ros, if you want to use a custom opencv, you need to recompile cv_bridge and replace the cv_bridge_noetic_fit_version package with your own custom opencv version.
 For example, if the ros version is noetic and the custom opencv version is 4.5.3, you need to compile cv_bridge_noetic_fit_version.
 
 ```shell

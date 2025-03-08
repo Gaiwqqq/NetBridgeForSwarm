@@ -63,11 +63,11 @@ such as `drone_1` will not be recognized as an id.
 
 ```yaml
 config:
-  debug: false                    # true时可以收到自己发出的消息，false时排除
-  odom_convert: true              # true时odom类型的topic将自动转为posestamped发出，收方会再转回odom
-  monitor_node: true              # true时启动monitor_node，用于检测bridge收到的消息的频率、带宽等信息, 目前弃用
-  warn_threshold: 3               # monitor_node的频率阈值，目前弃用
-  monitor_rate_hz: 500            # monitor_node的检测频率，必须大于所有topic的最大频率, 目前弃用
+  debug: false                    # When true, you can receive messages you sent; when false, they are excluded
+  odom_convert: true              # When true, odom-type topics will be automatically converted to PoseStamped before sending and converted back on the receiving end
+  monitor_node: true              # When true, enables monitor_node to track the frequency and bandwidth of messages received by the bridge (currently deprecated)
+  warn_threshold: 3               # Frequency threshold for monitor_node (currently deprecated)
+  monitor_rate_hz: 500            # Detection frequency of monitor_node; must be higher than the maximum frequency of all to
 ```
 
 ### 2.2 Topic configuration

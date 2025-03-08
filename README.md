@@ -1,20 +1,20 @@
 # NetBridgeForSwarm V1.0 BETA PREVIEW
 
 ## 1. Introduction
-- ROS1 has always been a challenge for multi-machine communication support. There are many existing solutions that require the project to be bound, which are not flexible enough to meet the needs of users.
+ROS1 has always been a challenge for multi-machine communication support. There are many existing solutions that require the project to be bound, which are not flexible enough to meet the needs of users.
   Therefore, we hope to develop a multi-machine communication middleware that can forward **ros topic**, **ros service**, and **image** (as a subtype of ros topic) messages to other machines, and support custom message types.
+  
+The inspiration for this project comes from the open-source project of Peixuan Shu, [swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge). We hope to refactor it and expand its functionality, making it more flexible and user-friendly.
 
-- The inspiration for this project comes from the open-source project of Peixuan Shu, [swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge). We hope to refactor it and expand its functionality, making it more flexible and user-friendly.
-
-- This is a multi-machine communication middleware that can forward messages from multiple ROS nodes to other machines, supporting custom message types, supporting ROS video stream transmission, and supporting ROS message TCP transmission.
+This is a multi-machine communication middleware that can forward messages from multiple ROS nodes to other machines, supporting custom message types, supporting ROS video stream transmission, and supporting ROS message TCP transmission.
   Thanks to zmqpp and my own encapsulation of the communication layer, users can get a high-performance and stable multi-machine communication experience without having to worry about the underlying network communication details.
 
 ### 1.1 Main Features
 
-- 1. All swarm agents use the same configuration file, which can flexibly configure the topics, services, and images (as a subtype of ros topic) to be forwarded, reducing the configuration complexity.
-- 2. Support custom message types, which can be added to `include/msgs_macro.hpp` and specified in the yaml file.
-- 3. Support ros video stream (sensor_msgs/Image) UDP transmission (custom compression ratio), ros topic TCP transmission, and ros service TCP transmission.
-- 4. Completely restructured code framework, making it more user-friendly, flexible, and extensible.
+- All swarm agents use the same configuration file, which can flexibly configure the topics, services, and images (as a subtype of ros topic) to be forwarded, reducing the configuration complexity.
+- Support custom message types, which can be added to `include/msgs_macro.hpp` and specified in the yaml file.
+- Support ros video stream (sensor_msgs/Image) UDP transmission (custom compression ratio), ros topic TCP transmission, and ros service TCP transmission.
+- Completely restructured code framework, making it more user-friendly, flexible, and extensible.
 
 ### 1.2 Future Work
 
@@ -40,8 +40,7 @@ catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
 ## 2. Configuration
 
 ### 2.1 Ip configuration
-
-- The IP configuration file should be set according to the actual network configuration. The `ip_sim.yaml` 
+The IP configuration file should be set according to the actual network configuration. The `ip_sim.yaml` 
 file is an example of basic configuration. The `IP` field in the configuration file should be set to the 
 corresponding IP address of the machine.
 
@@ -57,7 +56,7 @@ IP:
   drone4: 172.16.0.104              # drone 4 zld-4
 ```
 
-- The `srcIP` and `dstIP` fields in the topic configuration file should be set to the corresponding hostname in the IP configuration file. 
+The `srcIP` and `dstIP` fields in the topic configuration file should be set to the corresponding hostname in the IP configuration file. 
 The `all` and `all_drone` keywords cannot be deleted. The `drone` field can only be set to `drone0`, `drone5` in the form of `drone_1`, 
 such as `drone_1` will not be recognized as an id.
 
@@ -72,7 +71,7 @@ config:
 ```
 
 ### 2.2 Topic configuration
-- The `default.yaml` file defines the configuration information related to topic service. 
+The `default.yaml` file defines the configuration information related to topic service. 
 The specific configuration method is as follows:
   
 ```yaml
@@ -91,8 +90,6 @@ topics:
   prefix: true                    # add namespace prefix, default: true
   same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
 ```
-
-#### [English]
 
 The `all_drone` keyword represents all drones, `srcIP` and `dstIP` should correspond to the hostname in the IP field. 
 When `prefix` is true, the namespace will be automatically added to the topic name on the receiving side (dstIP), 
@@ -114,15 +111,12 @@ corresponding to the source of drone0 and drone1. When `same_prefix` is true, al
   prefix: false                   
   same_prefix: false
 ```
-
-- The format `/drone_{id}` can be added to the beginning of the topic_name, and the program will automatically parse the id. 
+The format `/drone_{id}` can be added to the beginning of the topic_name, and the program will automatically parse the id. 
 For example, in the above example, groundStation0 will receive `/drone_0_ego_planner_node/optimal_list`, `/drone_1_ego_planner_node/optimal_list`, etc.
 
 ### 2.3 Service configuration
-
-- The service supports multiple clients, one server, and the `prefix` only indicates whether the client needs to add a namespace. 
+The service supports multiple clients, one server, and the `prefix` only indicates whether the client needs to add a namespace. 
 For example, the server is `drone0`, the client is `groundStation0`, then the server's service name is `/add_two_ints`, and the client needs to call the service name `/drone0/add_two_ints`.
-- 
 ```yaml
 services:
   # --------- Services ---------- #
@@ -136,8 +130,7 @@ services:
 ```
 
 ## 2.4 Customize message type
-
-- To add a new custom message, you need to modify `include/msgs_macro.hpp`, add the custom message above 
+To add a new custom message, you need to modify `include/msgs_macro.hpp`, add the custom message above 
 the include line, and fill in the format in `MSGS_MACRO`. The first parameter of the X macro should match the `msg_type` in the yaml file.
 ```c++
 #ifndef __MSGS_MACRO__
@@ -183,8 +176,7 @@ the include line, and fill in the format in `MSGS_MACRO`. The first parameter of
 ## 3. Run
 
 ### 3.1 Single PC simulation
-
-- To run the simulation in a single PC, you need to create multiple virtual network cards. You can use the `sh scripts/create_virtual_interface.sh 4` 
+To run the simulation in a single PC, you need to create multiple virtual network cards. You can use the `sh scripts/create_virtual_interface.sh 4` 
 command to create virtual network cards, the parameter is the number of drones. The default IP address of the ground 
 station is `172.16.0.200`, and the IP address of drone0 is `172.16.0.100`, and so on. If you don't need the network card, 
 you can use the `scripts/delete_virtual_interface.sh` command to delete the network card, the parameter is the number of drones.
@@ -210,8 +202,7 @@ IP:
 ```
 
 ### 3.2 Realworld Run
-
-- To run in realworld, you need to modify the `ip_real.yaml` file. The launch file is as follows, you need to modify the path of the loaded yaml file and the name of the self-recognition.
+To run in realworld, you need to modify the `ip_real.yaml` file. The launch file is as follows, you need to modify the path of the loaded yaml file and the name of the self-recognition.
 
 ```xml
   <group ns="bridge">

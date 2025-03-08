@@ -1,12 +1,12 @@
 # NetBridgeForSwarm V1.0 BETA PREVIEW
 
 ## 1. 介绍
-- ROS1 对多机通讯的支持一直是个难题，现存的解决方案大多需要与项目绑定，难以定制化的满足使用需求。
+ROS1 对多机通讯的支持一直是个难题，现存的解决方案大多需要与项目绑定，难以定制化的满足使用需求。
 因此，希望开发一种多机通讯中间件，可以将**ros topic**、**ros service**、**image**等多种消息类型转发到其他机器，并支持自定义消息类型。
 
-- 灵感来源于Peixuan Shu博士的开源项目[swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge)，我们希望能将其重构，并进行功能扩展，使其更加灵活、易用。
+灵感来源于Peixuan Shu博士的开源项目[swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge)，我们希望能将其重构，并进行功能扩展，使其更加灵活、易用。
 
-- 这是一个ros多机通讯中间件，可以将多个ros节点的消息转发到其他机器，支持自定义消息/服务类型，支持ros视频流传输，支持ros消息TCP传输。
+这是一个ros多机通讯中间件，可以将多个ros节点的消息转发到其他机器，支持自定义消息/服务类型，支持ros视频流传输，支持ros消息TCP传输。
 同时得益于zmqpp以及本人在通讯层的封装使得用户无需关心底层网络通信细节便可获得良好的高性能稳定多机通讯体验。
 
 ### 1.1 主要功能
@@ -29,7 +29,7 @@
 sudo apt-get install libzmqpp-dev ros-noetic-topic-tools 
 ```
 
-- 注意，由于ros的cv_bridge依赖于opencv，且默认编译版本为ros自带，因此若要使用自定义的opencv，需自行重新编译cv_bridge并参照
+注意，由于ros的cv_bridge依赖于opencv，且默认编译版本为ros自带，因此若要使用自定义的opencv，需自行重新编译cv_bridge并参照
 项目中cv_bridge_noetic_fit_version包进行替换以适配自定义opencv版本
 例如：ros版本为noetic，自定义opencv版本为4.5.3，则需编译cv_bridge_noetic_fit_version
 ```shell
@@ -43,7 +43,7 @@ catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
 
 ### 2.1 IP 配置
 
-- 需要转发的topic在config文件夹内定义，`config/ip_sim.yaml`介绍了基本的配置方法。
+需要转发的topic在config文件夹内定义，`config/ip_sim.yaml`介绍了基本的配置方法。
 
 ```yaml
 IP:
@@ -57,7 +57,7 @@ IP:
   drone4: 172.16.0.104              # drone 4 zld-4
 ```
 
-- 设置hostname对应的ip，其中`all`和`all_drone`为关键字，不能删除。`drone`只能设置成`drone0`，`drone5`的形式，例如`drone_1`将无法识别id
+设置hostname对应的ip，其中`all`和`all_drone`为关键字，不能删除。`drone`只能设置成`drone0`，`drone5`的形式，例如`drone_1`将无法识别id
 
 ```yaml
 config:
@@ -69,7 +69,7 @@ config:
 ```
 
 ### 2.2 Topic 配置
-- `default.yaml` 定义了 topic service 相关的配置信息，具体配置方法如下：
+`default.yaml` 定义了 topic service 相关的配置信息，具体配置方法如下：
   
 ```yaml
 topics:
@@ -109,12 +109,12 @@ topics:
   same_prefix: false
 ```
 
-- 可在topic_name最前面加上`/drone_{id}`的格式，这种格式程序会自动解析id，例如上述例子的groudStation0将会收到，
+可在topic_name最前面加上`/drone_{id}`的格式，这种格式程序会自动解析id，例如上述例子的groudStation0将会收到，
 `/drone_0_ego_planner_node/optimal_list`、`/drone_1_ego_planner_node/optimal_list`等。
 
 ### 2.3 Service 配置
 
-- service 支持多客户端，一服务端，与前面不同的是，这里的`prefix` 仅表示客户端是否需要添加namespace，服务端无需添加。
+service 支持多客户端，一服务端，与前面不同的是，这里的`prefix` 仅表示客户端是否需要添加namespace，服务端无需添加。
 例如，服务端为`drone0`，客户端为`groundStation0`，则服务端的服务名为`/add_two_ints`，客户端需要call的服务名为`/drone0/add_two_ints`
 
 ```yaml
@@ -130,9 +130,7 @@ services:
 ```
 
 ## 2.4 自定义消息类型
-
-
-- 需添加新的自定义消息，需要修改`include/msgs_macro.hpp`，在上方include自定义消息，在`MSGS_MACRO`里按照格式填写，X宏的第一个参数需和yaml文件内的`msg_type`能够对应上
+需添加新的自定义消息，需要修改`include/msgs_macro.hpp`，在上方include自定义消息，在`MSGS_MACRO`里按照格式填写，X宏的第一个参数需和yaml文件内的`msg_type`能够对应上
 ```c++
 #ifndef __MSGS_MACRO__
 #define __MSGS_MACRO__
@@ -178,7 +176,7 @@ services:
 
 ### 3.1 本地模拟
 
-- 需创建多个虚拟网卡，可用`sh scripts/create_virtual_interface.sh 4`命令创建，参数为无人机的个数，groundStation默认设置
+需创建多个虚拟网卡，可用`sh scripts/create_virtual_interface.sh 4`命令创建，参数为无人机的个数，groundStation默认设置
 为`172.16.0.200`，drone0为`172.16.0.100`，drone1为`172.16.0.101`，以此类推。不需要网卡时可用`scripts/delete_virtual_interface.sh`删除网卡，参数同样为无人机的个数
 
 ```yaml
@@ -203,7 +201,7 @@ IP:
 
 ### 3.2 实机部署
 
-- 需修改`ip_real.yaml`文件， launch文件的编写方法如下，需要修改载入的yaml文件路径以及自身的识别名
+需修改`ip_real.yaml`文件， launch文件的编写方法如下，需要修改载入的yaml文件路径以及自身的识别名
 
 ```xml
   <group ns="bridge">

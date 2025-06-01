@@ -1,4 +1,4 @@
-string compressed_data
+std_msgs/String compressed_data
 uint32 original_width
 uint32 original_height
 string original_frame_id

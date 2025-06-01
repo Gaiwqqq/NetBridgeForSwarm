@@ -105,15 +105,15 @@ void BridgeFactory::getIpAndTopicConfig() {
       if (topic_xml.hasMember("imgResizeRate")) {
         XmlRpc::XmlRpcValue img_resize_rate_xml = topic_xml["imgResizeRate"];
         img_resize_rate = (double)(img_resize_rate_xml);
+        INFO_MSG_GREEN("   ** this img will be resized [imgResizeRate -> " << img_resize_rate << "]");
       }else
-        ROS_WARN("[Bridge]: topic %s does not have imgResizeRate, use default value 1.0", topic_name.c_str());
+        INFO_MSG_YELLOW("[Bridge]: topic " << topic_name.c_str() << " does not have imgResizeRate, use default value 1.0");
     }
     if (topic_type == "sensor_msgs/PointCloud2") {
       if (topic_xml.hasMember("cloudCompress")) {
         cloud_compress = topic_xml["cloudCompress"];
-
       }else
-        ROS_WARN("[Bridge]: topic %s does not have cloudCompress, use default value false", topic_name.c_str());
+        INFO_MSG_YELLOW("[Bridge]: topic " << topic_name.c_str() << " does not have cloudCompress, use default value false");
     }
 
     ROS_ASSERT(src_hostnames.getType() == XmlRpc::XmlRpcValue::TypeArray);
@@ -134,6 +134,8 @@ void BridgeFactory::getIpAndTopicConfig() {
     topic.max_freq_           = (XmlRpc::XmlRpcValue::TypeInt == frequency.getType() ? (int)frequency : (double)frequency);
     topic.img_resize_rate_    = img_resize_rate;
     topic.cloud_compress_     = cloud_compress;
+    if (cloud_compress)
+      INFO_MSG_GREEN("   ** this cloud will be compressed");
     topic.port_               = src_port;
     if (port_used_map_.find(topic.port_) == port_used_map_.end())
       port_used_map_[topic.port_] = true;

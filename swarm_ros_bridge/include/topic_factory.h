@@ -49,6 +49,7 @@ struct TopicCfg{
     double img_resize_rate_{1.0f};
     int  port_;
     bool cloud_compress_{false};
+    bool cloud_downsample_{false};
     bool has_prefix_{true};
     bool same_prefix_{false};
     bool dynamic_dst_{false};
@@ -85,8 +86,6 @@ private:
     bool            recv_flag_last_;
     std::thread     recv_thread_;
     std::mutex      recv_mutex_;
-
-    std::unique_ptr<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>> pt_cloud_compressor_;
 
     void recvFunction();
     bool sendFreqControl();

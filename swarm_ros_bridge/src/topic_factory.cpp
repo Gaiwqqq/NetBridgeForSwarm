@@ -14,11 +14,6 @@ TopicFactory::TopicFactory(const TopicCfg& topic_cfg,
 
   // process sockets!
   if (send_or_recv_ == SEND_OR_RECV::SEND){
-    if (topic_cfg_.type_ == "sensor_msgs/PointCloud2") {
-      pt_cloud_compressor_ = std::make_unique<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>>
-                             (pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3, false);
-    }
-
     if (topic_cfg_.type_ == "sensor_msgs/Image"){
       udp_sender_ = std::make_unique<UDPImgSender>(ip_map_[topic_cfg_.only1_dst_hostname_].c_str(), topic_cfg_.port_);
     }else if (!topic_cfg_.dynamic_dst_){
@@ -164,23 +159,33 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T> &event) {
 template<typename T>
 void TopicFactory::ptCloudCompress(const T &msg, size_t &data_len, std::unique_ptr<uint8_t[]> &data) {
   namespace ser = ros::serialization;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  pcl::fromROSMsg(msg, *cloud);
-  std::stringstream compressed_data;
-  pt_cloud_compressor_->encodePointCloud(cloud, compressed_data);
+  if (topic_cfg_.cloud_compress_) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::fromROSMsg(msg, *cloud);
+    std::stringstream compressed_data;
+    std::unique_ptr<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>> pt_cloud_compressor;
+    pt_cloud_compressor = std::make_unique<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>>(
+      pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3, false);
+    pt_cloud_compressor->encodePointCloud(cloud, compressed_data);
 
-  swarm_ros_bridge::PtCloudCompress msg_send_compressed;
-  msg_send_compressed.compressed_data   = compressed_data.str();
-  msg_send_compressed.original_width    = cloud->width;
-  msg_send_compressed.original_height   = cloud->height;
-  msg_send_compressed.original_frame_id = cloud->header.frame_id;
-  /* serialize the sending messages into send_buffer */
-  data_len = ser::serializationLength(msg_send_compressed);
-  data = std::make_unique<uint8_t[]>(data_len);
-  ser::OStream stream(data.get(), data_len);
-  ser::serialize(stream, msg_send_compressed);
+    swarm_ros_bridge::PtCloudCompress msg_send_compressed;
+    msg_send_compressed.compressed_data.data = compressed_data.str();
+    msg_send_compressed.original_width       = cloud->width;
+    msg_send_compressed.original_height      = cloud->height;
+    msg_send_compressed.original_frame_id    = cloud->header.frame_id;
+
+    /* serialize the sending messages into send_buffer */
+    data_len = ser::serializationLength(msg_send_compressed);
+    data     = std::make_unique<uint8_t[]>(data_len);
+    ser::OStream stream(data.get(), data_len);
+    ser::serialize(stream, msg_send_compressed);
+  }else {
+    data_len = ser::serializationLength(msg);
+    data     = std::make_unique<uint8_t[]>(data_len); // create a dynamic length array
+    ser::OStream stream(data.get(), data_len);
+    ser::serialize(stream, msg);
+  }
 }
-
 
 template <typename T>
 ros::Subscriber TopicFactory::nh_sub(std::string topic_name, const std::shared_ptr<ros::NodeHandle> &nh){
@@ -255,8 +260,13 @@ void TopicFactory::deserializePub(uint8_t *buffer_ptr, size_t msg_size) {
       swarm_ros_bridge::PtCloudCompress msg_compress;
       ser::deserialize(stream, msg_compress);
       pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-      std::stringstream compressed_data(msg_compress.compressed_data);
-      pt_cloud_compressor_->decodePointCloud(compressed_data, cloud);
+      std::stringstream compressed_data;
+      compressed_data << msg_compress.compressed_data.data;
+
+      std::unique_ptr<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>> pt_cloud_compressor;
+      pt_cloud_compressor = std::make_unique<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>>(
+        pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3, false);
+      pt_cloud_compressor->decodePointCloud(compressed_data, cloud);
       cloud->width           = msg_compress.original_width;
       cloud->height          = msg_compress.original_height;
       cloud->header.frame_id = msg_compress.original_frame_id;

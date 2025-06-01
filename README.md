@@ -1,4 +1,8 @@
-# NetBridgeForSwarm V1.0 BETA PREVIEW [中文](README-zh.md)
+# NetBridgeForSwarm V1.1 BETA PREVIEW [中文](README-zh.md)
+
+## 0. [version 1.1] New Features
+
+- Support PointCloud2 message compression transmission. The bandwidth consumption is greatly reduced.
 
 ## 1. Introduction
 ROS1 has always been a challenge for multi-machine communication support. There are many existing solutions that require the project to be bound, which are not flexible enough to meet the needs of users.
@@ -79,6 +83,8 @@ topics:
 - topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
   msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
   imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
+  cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
+  cloudDownsample: false          # only for [sensors_msgs/PointCloud2], !! not dev finished yet
   srcIP: 
   - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
   - drone1

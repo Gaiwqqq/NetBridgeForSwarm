@@ -1,5 +1,9 @@
 # NetBridgeForSwarm V1.0 BETA PREVIEW
 
+## 0. [verison 1.1] 新功能
+
+- 支持 sensors::PointCloud2 消息压缩传输 实测可大幅减小带宽占用
+
 ## 1. 介绍
 ROS1 对多机通讯的支持一直是个难题，现存的解决方案大多需要与项目绑定，难以定制化的满足使用需求。
 因此，希望开发一种多机通讯中间件，可以将**ros topic**、**ros service**、**image**等多种消息类型转发到其他机器，并支持自定义消息类型。
@@ -70,22 +74,24 @@ config:
 
 ### 2.2 Topic 配置
 `default.yaml` 定义了 topic service 相关的配置信息，具体配置方法如下：
-  
+
 ```yaml
 topics:
-- topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
-  msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
-  imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
-  srcIP: 
-  - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
-  - drone1
-  srcPort: 3001                   # ports of send_topics should be different
-  max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
-  dstIP: 
-  - groundStation0                # recv devices
-  - groundStation1
-  prefix: true                    # add namespace prefix, default: true
-  same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
+  - topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
+    msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
+    imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
+    cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
+    cloudDownsample: false          # only for [sensors_msgs/PointCloud2], !! not dev finished yet
+    srcIP:
+      - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
+      - drone1
+    srcPort: 3001                   # ports of send_topics should be different
+    max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
+    dstIP:
+      - groundStation0                # recv devices
+      - groundStation1
+    prefix: true                    # add namespace prefix, default: true
+    same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
 ```
 
 可用关键字`all_drone`代表所有飞机，`srcIP`和`dstIP`都要对应IP字段内填写的hostname，

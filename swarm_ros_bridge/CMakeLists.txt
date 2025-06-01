@@ -23,6 +23,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(Eigen3 REQUIRED)
+find_package(PCL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(JPEG REQUIRED)
@@ -31,6 +32,7 @@ add_message_files(
   FILES
   NetworkInfo.msg
   NetworkArray.msg
+  PtCloudCompress.msg
 )
 
 add_service_files(
@@ -57,6 +59,7 @@ include_directories(
     ${OpenCV_INCLUDE_DIRS}
     ${JPEG_INCLUDE_DIR}
     ${EIGEN3_INCLUDE_DIRS}
+    ${PCL_INCLUDE_DIRS}
 )
 
 catkin_install_python(PROGRAMS
@@ -85,6 +88,7 @@ target_link_libraries(bridge_new
     zmqpp
     pthread
     ${JPEG_LIBRARIES}
+    ${PCL_LIBRARIES}
 )
 
 add_executable(test_md5 test/md5test.cpp)

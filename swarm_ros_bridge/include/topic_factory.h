@@ -19,6 +19,12 @@
 #include "cv_bridge/cv_bridge.h"
 #include "opencv2/opencv.hpp"
 #include "pic_socket.h"
+#include "pcl/point_cloud.h"
+#include "pcl/point_types.h"
+#include "pcl_conversions/pcl_conversions.h"
+#include "pcl/compression/octree_pointcloud_compression.h"
+#include "swarm_ros_bridge/PtCloudCompress.h"
+#include "sensor_msgs/PointCloud2.h"
 #include <mutex>
 #include <boost/tti/has_data.hpp>
 
@@ -42,6 +48,7 @@ struct TopicCfg{
     double max_freq_{10.0f};
     double img_resize_rate_{1.0f};
     int  port_;
+    bool cloud_compress_{false};
     bool has_prefix_{true};
     bool same_prefix_{false};
     bool dynamic_dst_{false};
@@ -79,6 +86,8 @@ private:
     std::thread     recv_thread_;
     std::mutex      recv_mutex_;
 
+    std::unique_ptr<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>> pt_cloud_compressor_;
+
     void recvFunction();
     bool sendFreqControl();
 
@@ -96,6 +105,9 @@ private:
 
     template <typename T>
     void deserializePub(uint8_t *buffer_ptr, size_t msg_size);
+
+    template <typename T>
+    void ptCloudCompress(const T& msg, size_t & data_len, std::unique_ptr<uint8_t[]>& data);
 };
 
 #endif //SRC_TOPIC_FACTORY_H

@@ -4,44 +4,74 @@
 # std_msgs/String
 # (modify/add in include/msgs_macro.hpp if you need more)
 
-### list all <IPname: IP> here (IPname can be set arbitrarily) ###
-IP:
-  all: '*'                         # '*' stands for all IPs
-  all_drone: 'all_drone'           # all drone, not include station
-  groundStation: 192.168.100.67    # laptop (grond station)
-  # drone0: 192.168.100.124          # drone 0
-  drone0: 192.168.100.125          # drone 1
-  drone1: 192.168.100.126          # drone 2
-
-
 config:
   debug: false                    # recv msg that i send for debugging
   odom_convert: true              # convert odom to posestamped using odom_convert_node
   monitor_node: true              # check recv rate
   warn_threshold: 3               # if recv rate smaller than max_freq-warn_threashold, then warn
   monitor_rate_hz: 500            # it must be greater than max_freq
+
+services:
+  # --------- Services ---------- #
+  - srv_name: /add_two_ints
+    srv_type: swarm_ros_bridge/AddTwoInts
+    serverIp: drone0
+    clientIp:
+      - drone1
+      - drone2
+    srcPort: 2000
+    prefix: true
   
 topics:
+# --------- [special msg] Image msg ---------- #
+- topic_name: /camera/color/image_raw
+  msg_type: sensor_msgs/Image
+  imgResizeRate: 0.5
+  srcIP:
+    - drone0
+  srcPort: 3005
+  max_freq: 24
+  dstIP:
+    - groundStation0
+  prefix: false
+  same_prefix: false
+
+  # --------- [special msg] PointCloud2 msg ---------- #
+- topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
+  msg_type: sensor_msgs/PointCloud2
+  cloudCompress: false
+  srcIP:
+    - drone1
+  dstIP:
+    - drone2
+    - drone3
+  srcPort: 3002
+  max_freq: 5
+  prefix: true
+  same_prefix: true
+
 - topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
   msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
   srcIP: 
-  - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
+    - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
+  dstIP:
+    - groundStation0                # recv devices
+    - groundStation1
   srcPort: 3001                   # ports of send_topics should be different
   max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
-  dstIP: 
-  - groundStation0                # recv devices
-  - groundStation1
   prefix: true                    # add namespace prefix, default: true
   same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
 
 - topic_name: /drone_{id}_ego_planner_node/optimal_list  # keyword {id} will be replaced by drone id
   msg_type: visualization_msgs/Marker     
   srcIP: 
-  - all_drone                       
+    - all_drone
+  dstIP:
+    - groundStation0
+    - groundStation1
   srcPort: 3002                  
   max_freq: 30
-  dstIP: 
-  - groundStation0
-  - groundStation1
-  prefix: false                   
+  prefix: false
+
+
 

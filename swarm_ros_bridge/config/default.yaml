@@ -33,7 +33,7 @@ topics:
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
   msg_type: sensor_msgs/PointCloud2
   cloudCompress: true
-  cloudDownsample: false
+  cloudDownsample: -1.0
   srcIP:
     - drone1
   srcPort: 3002
@@ -46,7 +46,7 @@ topics:
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
   msg_type: sensor_msgs/PointCloud2
   cloudCompress: true
-  cloudDownsample: false
+  cloudDownsample: -1.0
   srcIP:
     - drone1
   srcPort: 3003

@@ -125,7 +125,7 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T> &event) {
     return;
   }
   else if constexpr (std::is_same<T, sensor_msgs::PointCloud2>::value) {
-    ptCloudCompress(msg, data_len, send_buffer);
+    ptCloudProcess(msg, data_len, send_buffer);
   }
   else{
     /* serialize the sending messages into send_buffer */
@@ -157,22 +157,32 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T> &event) {
 }
 
 template<typename T>
-void TopicFactory::ptCloudCompress(const T &msg, size_t &data_len, std::unique_ptr<uint8_t[]> &data) {
+void TopicFactory::ptCloudProcess(const T &msg, size_t &data_len, std::unique_ptr<uint8_t[]> &data) {
   namespace ser = ros::serialization;
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>());
+  pcl::fromROSMsg(msg, *cloud_in);
+  if (topic_cfg_.cloud_downsample_ > 0) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::VoxelGrid<pcl::PointXYZ> sor;
+    sor.setInputCloud(cloud_in);
+    sor.setLeafSize(static_cast<float>(topic_cfg_.cloud_downsample_),
+                    static_cast<float>(topic_cfg_.cloud_downsample_),
+                    static_cast<float>(topic_cfg_.cloud_downsample_));
+    sor.filter(*cloud_downsampled);
+    cloud_in = cloud_downsampled;
+  }
   if (topic_cfg_.cloud_compress_) {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::fromROSMsg(msg, *cloud);
     std::stringstream compressed_data;
     std::unique_ptr<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>> pt_cloud_compressor;
     pt_cloud_compressor = std::make_unique<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>>(
       pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3, false);
-    pt_cloud_compressor->encodePointCloud(cloud, compressed_data);
+    pt_cloud_compressor->encodePointCloud(cloud_in, compressed_data);
 
     swarm_ros_bridge::PtCloudCompress msg_send_compressed;
     msg_send_compressed.compressed_data.data = compressed_data.str();
-    msg_send_compressed.original_width       = cloud->width;
-    msg_send_compressed.original_height      = cloud->height;
-    msg_send_compressed.original_frame_id    = cloud->header.frame_id;
+    msg_send_compressed.original_width       = cloud_in->width;
+    msg_send_compressed.original_height      = cloud_in->height;
+    msg_send_compressed.original_frame_id    = cloud_in->header.frame_id;
 
     /* serialize the sending messages into send_buffer */
     data_len = ser::serializationLength(msg_send_compressed);
@@ -267,8 +277,8 @@ void TopicFactory::deserializePub(uint8_t *buffer_ptr, size_t msg_size) {
       pt_cloud_compressor = std::make_unique<pcl::io::OctreePointCloudCompression<pcl::PointXYZ>>(
         pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3, false);
       pt_cloud_compressor->decodePointCloud(compressed_data, cloud);
-      cloud->width           = msg_compress.original_width;
-      cloud->height          = msg_compress.original_height;
+      // cloud->width           = msg_compress.original_width;
+      // cloud->height          = msg_compress.original_height;
       cloud->header.frame_id = msg_compress.original_frame_id;
       pcl::toROSMsg(*cloud, msg);
     }else

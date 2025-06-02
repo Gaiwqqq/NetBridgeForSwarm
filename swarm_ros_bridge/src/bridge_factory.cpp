@@ -23,7 +23,7 @@ BridgeFactory::BridgeFactory(ros::NodeHandle& node, ros::NodeHandle& node_public
   }
   do_odom_convert_ = config["odom_convert"];
   is_debug_        = config["debug"];
-  my_drone_id_     = DRONE_ID_NULL;
+  my_drone_id_        = DRONE_ID_NULL;
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> Bridge Node >>>>>>>>>>>>>>>>>>>>>");
   getMyHostName();
   getIpAndTopicConfig();
@@ -100,6 +100,7 @@ void BridgeFactory::getIpAndTopicConfig() {
     bool has_prefix                   = topic_xml["prefix"];
     bool same_prefix                  = topic_xml["same_prefix"];
     bool cloud_compress                  = false;
+    double cloud_downsample              = -1;
     double img_resize_rate               = 1.0;
     if (topic_type == "sensor_msgs/Image") {
       if (topic_xml.hasMember("imgResizeRate")) {
@@ -107,13 +108,24 @@ void BridgeFactory::getIpAndTopicConfig() {
         img_resize_rate = (double)(img_resize_rate_xml);
         INFO_MSG_GREEN("   ** this img will be resized [imgResizeRate -> " << img_resize_rate << "]");
       }else
-        INFO_MSG_YELLOW("[Bridge]: topic " << topic_name.c_str() << " does not have imgResizeRate, use default value 1.0");
+        INFO_MSG_YELLOW("[Bridge]: topic does not have imgResizeRate, use default value 1.0");
     }
     if (topic_type == "sensor_msgs/PointCloud2") {
       if (topic_xml.hasMember("cloudCompress")) {
         cloud_compress = topic_xml["cloudCompress"];
       }else
-        INFO_MSG_YELLOW("[Bridge]: topic " << topic_name.c_str() << " does not have cloudCompress, use default value false");
+        INFO_MSG_YELLOW("[Bridge]: topic does not have cloudCompress, use default value false");
+
+      if (topic_xml.hasMember("cloudDownsample")) {
+        XmlRpc::XmlRpcValue cloud_downsample_xml = topic_xml["cloudDownsample"];
+        cloud_downsample = static_cast<double>(cloud_downsample_xml);
+        if (cloud_downsample < 1e-4 || cloud_downsample > 1e4) {
+          INFO_MSG_RED("[Bridge]: cloudDownsample value is out of range [0.0001, 10000], reset to 0.1");
+          cloud_downsample = -1;
+        }else
+          INFO_MSG_GREEN("   ** this cloud will be downsampled [cloudDownsample -> " << cloud_downsample << "]");
+      }else
+        INFO_MSG_YELLOW("[Bridge]: topic does not have cloudDownsample, use default value -1");
     }
 
     ROS_ASSERT(src_hostnames.getType() == XmlRpc::XmlRpcValue::TypeArray);
@@ -134,6 +146,7 @@ void BridgeFactory::getIpAndTopicConfig() {
     topic.max_freq_           = (XmlRpc::XmlRpcValue::TypeInt == frequency.getType() ? (int)frequency : (double)frequency);
     topic.img_resize_rate_    = img_resize_rate;
     topic.cloud_compress_     = cloud_compress;
+    topic.cloud_downsample_   = cloud_downsample;
     if (cloud_compress)
       INFO_MSG_GREEN("   ** this cloud will be compressed");
     topic.port_               = src_port;

@@ -23,6 +23,7 @@
 #include "pcl/point_types.h"
 #include "pcl_conversions/pcl_conversions.h"
 #include "pcl/compression/octree_pointcloud_compression.h"
+#include "pcl/filters/voxel_grid.h"
 #include "swarm_ros_bridge/PtCloudCompress.h"
 #include "sensor_msgs/PointCloud2.h"
 #include <mutex>
@@ -49,7 +50,7 @@ struct TopicCfg{
     double img_resize_rate_{1.0f};
     int  port_;
     bool cloud_compress_{false};
-    bool cloud_downsample_{false};
+    double cloud_downsample_{-1};
     bool has_prefix_{true};
     bool same_prefix_{false};
     bool dynamic_dst_{false};
@@ -106,7 +107,7 @@ private:
     void deserializePub(uint8_t *buffer_ptr, size_t msg_size);
 
     template <typename T>
-    void ptCloudCompress(const T& msg, size_t & data_len, std::unique_ptr<uint8_t[]>& data);
+    void ptCloudProcess(const T& msg, size_t & data_len, std::unique_ptr<uint8_t[]>& data);
 };
 
 #endif //SRC_TOPIC_FACTORY_H

@@ -3,6 +3,7 @@
 ## 0. [verison 1.1] 新功能
 
 - 支持 sensors::PointCloud2 消息压缩传输 实测可大幅减小带宽占用
+- 支持 sensors::PointCloud2 点云降采样传输
 
 ## 1. 介绍
 ROS1 对多机通讯的支持一直是个难题，现存的解决方案大多需要与项目绑定，难以定制化的满足使用需求。
@@ -81,7 +82,7 @@ topics:
     msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
     imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
     cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
-    cloudDownsample: false          # only for [sensors_msgs/PointCloud2], !! not dev finished yet
+    cloudDownsample: 0.1            # only for [sensors_msgs/PointCloud2], range [1e-4, 1e4] (default = -1.0, disable), value more, point less
     srcIP:
       - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
       - drone1
@@ -196,7 +197,7 @@ IP:
   drone3: 172.16.0.103
 ```
 ```xml
-    <group ns="bridge">
+<group ns="bridge">
     <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen" >
       <param name="hostname" type="string" value="drone1"/>
       <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />

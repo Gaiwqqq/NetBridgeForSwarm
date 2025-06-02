@@ -3,6 +3,7 @@
 ## 0. [version 1.1] New Features
 
 - Support PointCloud2 message compression transmission. The bandwidth consumption is greatly reduced.
+- Support PointCloud2 message downsampling transmission.
 
 ## 1. Introduction
 ROS1 has always been a challenge for multi-machine communication support. There are many existing solutions that require the project to be bound, which are not flexible enough to meet the needs of users.
@@ -77,24 +78,24 @@ config:
 ### 2.2 Topic configuration
 The `default.yaml` file defines the configuration information related to topic service. 
 The specific configuration method is as follows:
-  
+
 ```yaml
 topics:
-- topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
-  msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
-  imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
-  cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
-  cloudDownsample: false          # only for [sensors_msgs/PointCloud2], !! not dev finished yet
-  srcIP: 
-  - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
-  - drone1
-  srcPort: 3001                   # ports of send_topics should be different
-  max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
-  dstIP: 
-  - groundStation0                # recv devices
-  - groundStation1
-  prefix: true                    # add namespace prefix, default: true
-  same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
+  - topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
+    msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
+    imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
+    cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
+    cloudDownsample: 0.1            # only for [sensors_msgs/PointCloud2], range [1e-4, 1e4] (default = -1.0, disable), value more, point less
+    srcIP:
+      - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
+      - drone1
+    srcPort: 3001                   # ports of send_topics should be different
+    max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
+    dstIP:
+      - groundStation0                # recv devices
+      - groundStation1
+    prefix: true                    # add namespace prefix, default: true
+    same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
 ```
 
 The `all_drone` keyword represents all drones, `srcIP` and `dstIP` should correspond to the hostname in the IP field. 

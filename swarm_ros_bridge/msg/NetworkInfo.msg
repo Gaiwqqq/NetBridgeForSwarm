@@ -1,5 +1,19 @@
-
 string name
+string msg_type
+string direction
+string codec
+float32 configured_rate_hz
+float32 send_rate_hz
 float32 recv_rate_hz
 float32 bandwidth_kbps
-int32 packet_size
+float32 avg_latency_ms
+float32 jitter_ms
+float32 stability_score
+float32 last_recv_age_ms
+bool adaptive_quality_enabled
+uint32 configured_jpeg_quality
+uint32 current_jpeg_quality
+float32 target_bandwidth_kbps
+uint32 packet_size
+uint32 total_messages
+uint32 dropped_messages

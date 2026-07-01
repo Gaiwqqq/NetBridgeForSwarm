@@ -7,7 +7,9 @@
 
 #include "ros/ros.h"
 #include "Eigen/Eigen"
+#include "diagnostics/topic_metrics.hpp"
 #include "msgs_macro.hpp"
+#include "transport/draco_pointcloud_codec.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -17,6 +19,7 @@
 #include <zmqpp/zmqpp.hpp>
 #include "image_transport/image_transport.h"
 #include "cv_bridge/cv_bridge.h"
+#include "sensor_msgs/image_encodings.h"
 #include "opencv2/opencv.hpp"
 #include "pic_socket.h"
 #include "pcl/point_cloud.h"
@@ -27,11 +30,13 @@
 #include "swarm_ros_bridge/PtCloudCompress.h"
 #include "sensor_msgs/PointCloud2.h"
 #include <mutex>
+#include <memory>
 #include <boost/tti/has_data.hpp>
 
 #define SUB_QUEUE_SIZE 10
 #define PUB_QUEUE_SIZE 20
 BOOST_TTI_HAS_DATA(to_drone_ids);
+BOOST_TTI_HAS_DATA(header);
 
 struct TopicCfg{
 #define NOT_ONLY_ONE_DST "not_only"
@@ -48,9 +53,17 @@ struct TopicCfg{
     std::map<std::string, bool> dst_hostname_map_, src_hostname_map_, src_ip_map_, dst_ip_map_;
     double max_freq_{10.0f};
     double img_resize_rate_{1.0f};
+    int img_jpeg_quality_{80};
+    bool img_adaptive_quality_{false};
+    int img_min_jpeg_quality_{45};
+    int img_max_jpeg_quality_{90};
+    double img_target_bandwidth_kbps_{1200.0};
+    int img_quality_step_{5};
+    int img_adapt_cooldown_frames_{8};
     int  port_;
     bool cloud_compress_{false};
     double cloud_downsample_{-1};
+    std::string cloud_codec_{"raw"};
     bool has_prefix_{true};
     bool same_prefix_{false};
     bool dynamic_dst_{false};
@@ -68,6 +81,7 @@ public:
     ~TopicFactory();
     void createThread();
     void stopThread();
+    swarm_ros_bridge::diagnostics::TopicMetrics GetMetricsSnapshot() const;
 
 private:
     TopicCfg topic_cfg_;
@@ -87,9 +101,21 @@ private:
     bool            recv_flag_last_;
     std::thread     recv_thread_;
     std::mutex      recv_mutex_;
+    swarm_ros_bridge::transport::DracoPointCloudCodec draco_codec_;
+    mutable std::mutex metrics_mutex_;
+    swarm_ros_bridge::diagnostics::TopicRuntimeState metrics_state_;
 
     void recvFunction();
     bool sendFreqControl();
+    int currentImageJpegQuality() const;
+    void recordSend(std::size_t bytes);
+    void recordDrop();
+    void recordReceive(std::size_t bytes, double latency_ms);
+    void pruneMetricsWindowLocked(const ros::Time& now);
+    void maybeAdaptImageQualityLocked(const ros::Time& now);
+    static double inferLatencyMs(const std_msgs::Header& header);
+    static void computeLatencyStats(double latency_ms,
+                                    swarm_ros_bridge::diagnostics::TopicRuntimeState* state);
 
     template <typename T>
     void subCallback(const ros::MessageEvent<const T> &event);

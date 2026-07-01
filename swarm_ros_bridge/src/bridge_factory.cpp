@@ -13,6 +13,37 @@
 #include "bridge_factory.hpp"
 #include <memory>
 
+namespace {
+
+double XmlRpcToDouble(const XmlRpc::XmlRpcValue& value, double fallback) {
+  if (value.getType() == XmlRpc::XmlRpcValue::TypeInt) {
+    return static_cast<int>(value);
+  }
+  if (value.getType() == XmlRpc::XmlRpcValue::TypeDouble) {
+    return static_cast<double>(value);
+  }
+  return fallback;
+}
+
+int XmlRpcToInt(const XmlRpc::XmlRpcValue& value, int fallback) {
+  if (value.getType() == XmlRpc::XmlRpcValue::TypeInt) {
+    return static_cast<int>(value);
+  }
+  if (value.getType() == XmlRpc::XmlRpcValue::TypeDouble) {
+    return static_cast<int>(static_cast<double>(value));
+  }
+  return fallback;
+}
+
+bool XmlRpcToBool(const XmlRpc::XmlRpcValue& value, bool fallback) {
+  if (value.getType() == XmlRpc::XmlRpcValue::TypeBoolean) {
+    return static_cast<bool>(value);
+  }
+  return fallback;
+}
+
+}  // namespace
+
 BridgeFactory::BridgeFactory(ros::NodeHandle& node, ros::NodeHandle& node_public) {
   nh_        = std::make_shared<ros::NodeHandle>(node);
   nh_public_ = std::make_shared<ros::NodeHandle>(node_public);
@@ -29,6 +60,10 @@ BridgeFactory::BridgeFactory(ros::NodeHandle& node, ros::NodeHandle& node_public
   getIpAndTopicConfig();
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> Topic List >>>>>>>>>>>>>>>>>>>>>>");
   topicOperatorInit();
+  diagnostics_pub_ =
+      nh_public_->advertise<swarm_ros_bridge::NetworkArray>("/swarm_bridge/diagnostics", 10);
+  diagnostics_timer_ = nh_public_->createTimer(
+      ros::Duration(1.0), &BridgeFactory::publishDiagnostics, this);
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> Service List >>>>>>>>>>>>>>>>>>>>>");
   getServiceConfigAndInit();
 }
@@ -101,14 +136,60 @@ void BridgeFactory::getIpAndTopicConfig() {
     bool same_prefix                  = topic_xml["same_prefix"];
     bool cloud_compress                  = false;
     double cloud_downsample              = -1;
+    std::string cloud_codec              = "raw";
     double img_resize_rate               = 1.0;
+    int img_jpeg_quality                 = 80;
+    bool img_adaptive_quality            = false;
+    int img_min_jpeg_quality             = 45;
+    int img_max_jpeg_quality             = 90;
+    double img_target_bandwidth_kbps     = 1200.0;
+    int img_quality_step                 = 5;
+    int img_adapt_cooldown_frames        = 8;
     if (topic_type == "sensor_msgs/Image") {
       if (topic_xml.hasMember("imgResizeRate")) {
         XmlRpc::XmlRpcValue img_resize_rate_xml = topic_xml["imgResizeRate"];
-        img_resize_rate = (double)(img_resize_rate_xml);
+        img_resize_rate = XmlRpcToDouble(img_resize_rate_xml, img_resize_rate);
         INFO_MSG_GREEN("   ** this img will be resized [imgResizeRate -> " << img_resize_rate << "]");
       }else
         INFO_MSG_YELLOW("[Bridge]: topic does not have imgResizeRate, use default value 1.0");
+      if (topic_xml.hasMember("imgJpegQuality")) {
+        img_jpeg_quality = XmlRpcToInt(topic_xml["imgJpegQuality"], img_jpeg_quality);
+        img_jpeg_quality = std::max(10, std::min(100, img_jpeg_quality));
+        INFO_MSG_GREEN("   ** this img jpeg quality [imgJpegQuality -> " << img_jpeg_quality << "]");
+      } else {
+        INFO_MSG_YELLOW("[Bridge]: topic does not have imgJpegQuality, use default value 80");
+      }
+      if (topic_xml.hasMember("imgAdaptiveQuality")) {
+        img_adaptive_quality =
+            XmlRpcToBool(topic_xml["imgAdaptiveQuality"], img_adaptive_quality);
+      }
+      if (topic_xml.hasMember("imgMinJpegQuality")) {
+        img_min_jpeg_quality =
+            XmlRpcToInt(topic_xml["imgMinJpegQuality"], img_min_jpeg_quality);
+      }
+      if (topic_xml.hasMember("imgMaxJpegQuality")) {
+        img_max_jpeg_quality =
+            XmlRpcToInt(topic_xml["imgMaxJpegQuality"], img_max_jpeg_quality);
+      }
+      if (topic_xml.hasMember("imgTargetBandwidthKbps")) {
+        img_target_bandwidth_kbps =
+            XmlRpcToDouble(topic_xml["imgTargetBandwidthKbps"], img_target_bandwidth_kbps);
+      }
+      if (topic_xml.hasMember("imgQualityStep")) {
+        img_quality_step = XmlRpcToInt(topic_xml["imgQualityStep"], img_quality_step);
+      }
+      if (topic_xml.hasMember("imgAdaptCooldownFrames")) {
+        img_adapt_cooldown_frames =
+            XmlRpcToInt(topic_xml["imgAdaptCooldownFrames"], img_adapt_cooldown_frames);
+      }
+      img_min_jpeg_quality = std::max(10, std::min(100, img_min_jpeg_quality));
+      img_max_jpeg_quality = std::max(img_min_jpeg_quality, std::min(100, img_max_jpeg_quality));
+      img_quality_step = std::max(1, img_quality_step);
+      img_adapt_cooldown_frames = std::max(1, img_adapt_cooldown_frames);
+      INFO_MSG_GREEN("   ** adaptive jpeg [enabled -> " << (img_adaptive_quality ? "true" : "false")
+                      << ", min -> " << img_min_jpeg_quality
+                      << ", max -> " << img_max_jpeg_quality
+                      << ", target -> " << img_target_bandwidth_kbps << "kbps]");
     }
     if (topic_type == "sensor_msgs/PointCloud2") {
       if (topic_xml.hasMember("cloudCompress")) {
@@ -118,14 +199,19 @@ void BridgeFactory::getIpAndTopicConfig() {
 
       if (topic_xml.hasMember("cloudDownsample")) {
         XmlRpc::XmlRpcValue cloud_downsample_xml = topic_xml["cloudDownsample"];
-        cloud_downsample = static_cast<double>(cloud_downsample_xml);
+        cloud_downsample = XmlRpcToDouble(cloud_downsample_xml, cloud_downsample);
         if (cloud_downsample < 1e-4 || cloud_downsample > 1e4) {
-          INFO_MSG_RED("[Bridge]: cloudDownsample value is out of range [0.0001, 10000], reset to 0.1");
+          INFO_MSG_RED("[Bridge]: cloudDownsample value is out of range [0.0001, 10000], disable downsample");
           cloud_downsample = -1;
         }else
           INFO_MSG_GREEN("   ** this cloud will be downsampled [cloudDownsample -> " << cloud_downsample << "]");
       }else
         INFO_MSG_YELLOW("[Bridge]: topic does not have cloudDownsample, use default value -1");
+      if (topic_xml.hasMember("cloudCodec")) {
+        cloud_codec = static_cast<std::string>(topic_xml["cloudCodec"]);
+      } else if (cloud_compress) {
+        cloud_codec = "pcl_octree";
+      }
     }
 
     ROS_ASSERT(src_hostnames.getType() == XmlRpc::XmlRpcValue::TypeArray);
@@ -145,10 +231,18 @@ void BridgeFactory::getIpAndTopicConfig() {
     topic.type_               = topic_type;
     topic.max_freq_           = (XmlRpc::XmlRpcValue::TypeInt == frequency.getType() ? (int)frequency : (double)frequency);
     topic.img_resize_rate_    = img_resize_rate;
+    topic.img_jpeg_quality_   = img_jpeg_quality;
+    topic.img_adaptive_quality_ = img_adaptive_quality;
+    topic.img_min_jpeg_quality_ = img_min_jpeg_quality;
+    topic.img_max_jpeg_quality_ = img_max_jpeg_quality;
+    topic.img_target_bandwidth_kbps_ = img_target_bandwidth_kbps;
+    topic.img_quality_step_ = img_quality_step;
+    topic.img_adapt_cooldown_frames_ = img_adapt_cooldown_frames;
     topic.cloud_compress_     = cloud_compress;
     topic.cloud_downsample_   = cloud_downsample;
+    topic.cloud_codec_        = cloud_codec;
     if (cloud_compress)
-      INFO_MSG_GREEN("   ** this cloud will be compressed");
+      INFO_MSG_GREEN("   ** this cloud will be compressed [codec -> " << topic.cloud_codec_ << "]");
     topic.port_               = src_port;
     if (port_used_map_.find(topic.port_) == port_used_map_.end())
       port_used_map_[topic.port_] = true;
@@ -386,4 +480,44 @@ void BridgeFactory::stopBridge() {
   INFO_MSG_RED("===========================================");
   INFO_MSG_RED("[Bridge]: all recv_topics_ threads Stopped!");
   INFO_MSG_RED("===========================================");
+}
+
+void BridgeFactory::publishDiagnostics(const ros::TimerEvent& /*event*/) {
+  swarm_ros_bridge::NetworkArray message;
+  message.header.stamp = ros::Time::now();
+  message.header.frame_id = my_hostname_;
+
+  auto append_metrics = [&message](const TopicFactory::Ptr& topic_factory) {
+    const auto metrics = topic_factory->GetMetricsSnapshot();
+    swarm_ros_bridge::NetworkInfo info;
+    info.name = metrics.topic_name;
+    info.msg_type = metrics.msg_type;
+    info.direction = metrics.direction;
+    info.codec = metrics.codec;
+    info.configured_rate_hz = static_cast<float>(metrics.configured_rate_hz);
+    info.send_rate_hz = static_cast<float>(metrics.send_rate_hz);
+    info.recv_rate_hz = static_cast<float>(metrics.recv_rate_hz);
+    info.bandwidth_kbps = static_cast<float>(metrics.bandwidth_kbps);
+    info.avg_latency_ms = static_cast<float>(metrics.avg_latency_ms);
+    info.jitter_ms = static_cast<float>(metrics.jitter_ms);
+    info.stability_score = static_cast<float>(metrics.stability_score);
+    info.last_recv_age_ms = static_cast<float>(metrics.last_recv_age_ms);
+    info.adaptive_quality_enabled = metrics.adaptive_quality_enabled;
+    info.configured_jpeg_quality = metrics.configured_jpeg_quality;
+    info.current_jpeg_quality = metrics.current_jpeg_quality;
+    info.target_bandwidth_kbps = static_cast<float>(metrics.target_bandwidth_kbps);
+    info.packet_size = metrics.packet_size;
+    info.total_messages = static_cast<std::uint32_t>(metrics.total_messages);
+    info.dropped_messages = static_cast<std::uint32_t>(metrics.dropped_messages);
+    message.info.push_back(info);
+  };
+
+  for (const auto& entry : send_topics_) {
+    append_metrics(entry.second);
+  }
+  for (const auto& entry : recv_topics_) {
+    append_metrics(entry.second);
+  }
+
+  diagnostics_pub_.publish(message);
 }

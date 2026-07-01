@@ -1,4 +1,9 @@
-std_msgs/String compressed_data
+std_msgs/Header original_header
+time sender_stamp
+uint8[] compressed_bytes
 uint32 original_width
 uint32 original_height
 string original_frame_id
+string codec
+float32 voxel_leaf_size
+bool receiver_stamp

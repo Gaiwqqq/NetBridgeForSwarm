@@ -4,6 +4,8 @@
 #define __MSGS_MACRO__
 #include <ros/ros.h>
 
+#include "logging/bridge_logger.hpp"
+
 #include <std_msgs/String.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -16,11 +18,11 @@
 #include <swarm_ros_bridge/AddTwoInts.h>
 // include your msg type here
 
-#define INFO_MSG(str)        do {std::cout << str << std::endl; } while(false)
-#define INFO_MSG_RED(str)    do {std::cout << "\033[31m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_GREEN(str)  do {std::cout << "\033[32m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_YELLOW(str) do {std::cout << "\033[33m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_BLUE(str)   do {std::cout << "\033[34m" << str << "\033[0m" << std::endl; } while(false)
+#define INFO_MSG(str)        BRIDGE_LOG_INFO("Legacy", "", str)
+#define INFO_MSG_RED(str)    BRIDGE_LOG_ERROR("Legacy", "", str)
+#define INFO_MSG_GREEN(str)  BRIDGE_LOG_INFO("Legacy", "", str)
+#define INFO_MSG_YELLOW(str) BRIDGE_LOG_WARN("Legacy", "", str)
+#define INFO_MSG_BLUE(str)   BRIDGE_LOG_INFO("Legacy", "", str)
 
 // Use X macro
 #define MSGS_MACRO \
@@ -37,5 +39,4 @@
   X("swarm_ros_bridge/AddTwoInts", swarm_ros_bridge::AddTwoInts)
 
 #endif
-
 

@@ -17,6 +17,7 @@
 #include "ros/ros.h"
 #include "Eigen/Eigen"
 #include "msgs_macro.hpp"
+#include "swarm_ros_bridge/NetworkArray.h"
 #include "topic_factory.h"
 #include "service_factory.h"
 #include <cstdio>
@@ -70,11 +71,14 @@ private:
     std::map<std::string, ServiceFactory::Ptr> service_servers_, service_clients_;
     std::map<std::string, bool>                dst_hostname_map_, src_hostname_map_;
     std::map<std::string, std::string>         ip_map_;                          // map host name and IP
+    ros::Publisher diagnostics_pub_;
+    ros::Timer diagnostics_timer_;
 
     void getMyHostName();
     void getIpAndTopicConfig();
     void getServiceConfigAndInit();
     void topicOperatorInit();
+    void publishDiagnostics(const ros::TimerEvent& event);
     static std::string checkIfPointToPointPipeline(TopicCfg& topic_cfg);
 
     //tools

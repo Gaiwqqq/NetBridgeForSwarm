@@ -10,9 +10,9 @@ services:
   # --------- Services ---------- #
   - srv_name: /add_two_ints
     srv_type: swarm_ros_bridge/AddTwoInts
-    serverIp: drone0
+    serverIp: drone1
     clientIp:
-      - drone1
+      - groundStation0
       - drone2
     srcPort: 2000
     prefix: true
@@ -22,7 +22,7 @@ topics:
 - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
   msg_type: visualization_msgs/MarkerArray
   srcIP:
-    - drone0
+    - drone1
   srcPort: 3001
   max_freq: 20
   dstIP:
@@ -34,12 +34,13 @@ topics:
   msg_type: sensor_msgs/PointCloud2
   cloudCompress: true
   cloudDownsample: -1.0
+  cloudCodec: draco
   srcIP:
     - drone1
   srcPort: 3002
   max_freq: 5
   dstIP:
-    - drone2
+    - groundStation0
   prefix: true
   same_prefix: true
 
@@ -47,19 +48,20 @@ topics:
   msg_type: sensor_msgs/PointCloud2
   cloudCompress: true
   cloudDownsample: -1.0
+  cloudCodec: draco
   srcIP:
     - drone1
   srcPort: 3003
   max_freq: 5
   dstIP:
-    - drone2
+    - groundStation0
   prefix: true
   same_prefix: true
 
 - topic_name: /ekf_quat/ekf_odom
   msg_type: nav_msgs/Odometry
   srcIP:
-    - drone0
+    - drone1
   srcPort: 3004
   max_freq: 30
   dstIP:
@@ -67,30 +69,35 @@ topics:
   prefix: false
   same_prefix: false
 
-- topic_name: /goal_with_id_from_station
-  msg_type: quadrotor_msgs/GoalSet
-  srcIP:
-    - groundStation0
-  srcPort: 3006
-  max_freq: -1
-  dstIP:
-    - drone0
-  prefix: true
-  same_prefix: true
+# - topic_name: /goal_with_id_from_station
+#   msg_type: quadrotor_msgs/GoalSet
+#   srcIP:
+#     - groundStation0
+#   srcPort: 3006
+#   max_freq: -1
+#   dstIP:
+#     - drone0
+#   prefix: true
+#   same_prefix: true
 
 - topic_name: /camera/color/image_raw
   msg_type: sensor_msgs/Image
   imgResizeRate: 0.5
+  imgJpegQuality: 85
+  imgAdaptiveQuality: true
+  imgMinJpegQuality: 40
+  imgMaxJpegQuality: 90
+  imgTargetBandwidthKbps: 800
+  imgQualityStep: 5
+  imgAdaptCooldownFrames: 6
   srcIP:
-    - drone0
+    - drone1
   srcPort: 3005
   max_freq: 24
   dstIP:
     - groundStation0
   prefix: false
   same_prefix: false
-
-
 
 
 

@@ -1,231 +1,291 @@
-# NetBridgeForSwarm V1.0 BETA PREVIEW
+# NetBridgeForSwarm V1.1 BETA PREVIEW [English](README.md)
 
-## 0. [verison 1.1] 新功能
+## 0. V1.1 新增内容
 
-- 支持 sensors::PointCloud2 消息压缩传输 实测可大幅减小带宽占用
-- 支持 sensors::PointCloud2 点云降采样传输
+- 支持 `sensor_msgs/PointCloud2` 压缩传输，显著降低带宽占用。
+- 支持 `sensor_msgs/PointCloud2` 发送前降采样。
+- 支持点云 `Draco` 编解码。
+- 支持图像流自适应 JPEG 质量控制。
+- 增加终端诊断界面 `bridge_tui`。
 
-## 1. 介绍
-ROS1 对多机通讯的支持一直是个难题，现存的解决方案大多需要与项目绑定，难以定制化的满足使用需求。
-因此，希望开发一种多机通讯中间件，可以将**ros topic**、**ros service**、**image**等多种消息类型转发到其他机器，并支持自定义消息类型。
+## 1. 项目介绍
 
-灵感来源于Peixuan Shu博士的开源项目[swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge)，我们希望能将其重构，并进行功能扩展，使其更加灵活、易用。
+ROS1 在多机通信场景里一直不够友好，很多现有方案与具体工程耦合较深，不方便在无人机集群和地面站混合部署时复用。
 
-这是一个ros多机通讯中间件，可以将多个ros节点的消息转发到其他机器，支持自定义消息/服务类型，支持ros视频流传输，支持ros消息TCP传输。
-同时得益于zmqpp以及本人在通讯层的封装使得用户无需关心底层网络通信细节便可获得良好的高性能稳定多机通讯体验。
+NetBridgeForSwarm 是一个面向 ROS1 的多机通信中间件，支持转发：
+
+- ROS topic
+- ROS service
+- 图像流 `sensor_msgs/Image`
+- 自定义消息与服务类型
+
+本项目受到 Peixuan Shu 的开源项目 [swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge) 启发，并在此基础上扩展了更灵活的配置方式、图像传输能力、点云传输能力以及更完整的诊断支持。
 
 ### 1.1 主要功能
 
-- 所有智能体使用 `同一个配置文件`，可灵活配置需要转发的topic，service, image(作为ros topic的子类型)， 免去繁琐的配置过程
-- 支持**自定义消息类型**，只需在`include/msgs_macro.hpp`中添加自定义topic/service类型，并在yaml文件中指定消息类型即可
-- 支持ros视频流(sensor_msgs/Image)UDP传输（可自定义压缩比）， ros topic TCP传输， ros service TCP传输
-- 完全重构的代码框架，使其更加易用、灵活且易于扩展
+- 所有节点共用一套 YAML 配置。
+- 通过 `include/msgs_macro.hpp` 扩展自定义 topic / service 类型。
+- 图像通过 UDP 传输，支持缩放和自适应 JPEG 质量调节。
+- topic 和 service 通过 TCP 转发。
+- 点云支持压缩、降采样与 Draco codec。
+- 可选 TUI 界面查看主机、topic 和日志状态。
 
-### 1.2 后续计划
+### 1.2 依赖
 
-- 视频流传输的更多自定义配置，例如码率，压缩格式等
-- 增加ros topic UDP传输
-- 增加ros service UDP传输
-
-### 1.3 依赖
-
-```shell
-#zmqpp 
-sudo apt-get install libzmqpp-dev ros-noetic-topic-tools 
+```bash
+sudo apt-get install libzmqpp-dev ros-noetic-topic-tools
 ```
 
-注意，由于ros的cv_bridge依赖于opencv，且默认编译版本为ros自带，因此若要使用自定义的opencv，需自行重新编译cv_bridge并参照
-项目中cv_bridge_noetic_fit_version包进行替换以适配自定义opencv版本
-例如：ros版本为noetic，自定义opencv版本为4.5.3，则需编译cv_bridge_noetic_fit_version
-```shell
-# opencv
+此外还依赖：
+
+- ROS Noetic / catkin
+- `cv_bridge_noetic_fit_version`
+- OpenCV
+- PCL
+- JPEG
+- 仓库内置第三方库：`FTXUI`、`draco`
+
+如果你使用自定义 OpenCV，需要重新编译 `cv_bridge`，并替换为适配版本的 `cv_bridge_noetic_fit_version`。
+
+示例：
+
+```cmake
 find_package(OpenCV 4.5.3 REQUIRED)
 catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
 ```
 
+## 2. 配置说明
 
-## 2. 配置文件
+主要配置文件位于 [`swarm_ros_bridge/config`](./swarm_ros_bridge/config)：
+
+- `default.yaml`：实机示例配置
+- `default_sim.yaml`：单机模拟示例配置
+- `ip_real.yaml`：实机 IP 映射
+- `ip_sim.yaml`：模拟 IP 映射
 
 ### 2.1 IP 配置
 
-需要转发的topic在config文件夹内定义，`config/ip_sim.yaml`介绍了基本的配置方法。
+每个 bridge 节点都通过 ROS 参数 `hostname` 标识自己，这个值必须出现在 `IP` 映射表中。
 
 ```yaml
 IP:
-  all: '*'                          # '*' stands for all IPs
-  all_drone: 'all_drone'            # all drone, not include station
-  groundStation0: 172.16.0.200      # laptop (grond station)
-  drone0: 172.16.0.100              # drone 0 zld-4
-  drone1: 172.16.0.101              # drone 1 zld-4
-  drone2: 172.16.0.102              # drone 2 zld-4
-  drone3: 172.16.0.103              # drone 3 zld-4
-  drone4: 172.16.0.104              # drone 4 zld-4
+  all: '*'
+  all_drone: 'all_drone'
+  groundStation0: 172.16.0.200
+  drone0: 172.16.0.100
+  drone1: 172.16.0.101
+  drone2: 172.16.0.102
+  drone3: 172.16.0.103
 ```
 
-设置hostname对应的ip，其中`all`和`all_drone`为关键字，不能删除。`drone`只能设置成`drone0`，`drone5`的形式，例如`drone_1`将无法识别id
+注意：
+
+- `all` 和 `all_drone` 是保留关键字，不能删除。
+- 无人机命名必须使用 `drone0`、`drone1` 这种格式。
+- `drone_1` 这类名字不会被解析成 drone id。
+
+全局配置示例：
 
 ```yaml
 config:
-  debug: false                    # true时可以收到自己发出的消息，false时排除
-  odom_convert: true              # true时odom类型的topic将自动转为posestamped发出，收方会再转回odom
-  monitor_node: true              # true时启动monitor_node，用于检测bridge收到的消息的频率、带宽等信息, 目前弃用
-  warn_threshold: 3               # monitor_node的频率阈值，目前弃用
-  monitor_rate_hz: 500            # monitor_node的检测频率，必须大于所有topic的最大频率, 目前弃用
+  debug: false
+  odom_convert: true
+  monitor_node: true
+  warn_threshold: 3
+  monitor_rate_hz: 500
 ```
 
 ### 2.2 Topic 配置
-`default.yaml` 定义了 topic service 相关的配置信息，具体配置方法如下：
+
+示例：
 
 ```yaml
 topics:
-  - topic_name: /ekf_quat/ekf_odom  # send the messages of this ROS topic
-    msg_type: nav_msgs/Odometry     # ROS message type (rosmsg style)
-    imgResizeRate: 0.5              # only for image topic, resize rate, default: 1.0(raw image) [only used for image topic]                         
-    cloudCompress: true             # only for [sensors_msgs/PointCloud2], default = false
-    cloudDownsample: 0.1            # only for [sensors_msgs/PointCloud2], range [1e-4, 1e4] (default = -1.0, disable), value more, point less
+  - topic_name: /ekf_quat/ekf_odom
+    msg_type: nav_msgs/Odometry
     srcIP:
-      - all_drone                     # send devices, all_drone means drone0, drone1, drone2....
       - drone1
-    srcPort: 3001                   # ports of send_topics should be different
-    max_freq: -1                    # max send frequent(hz), default: 10, unlimited: -1
+    srcPort: 3004
+    max_freq: 30
     dstIP:
-      - groundStation0                # recv devices
-      - groundStation1
-    prefix: true                    # add namespace prefix, default: true
-    same_prefix: false              # prefix namespace with same name, default: false (multi adress to one topic)
+      - groundStation0
+    prefix: false
+    same_prefix: false
 ```
 
-可用关键字`all_drone`代表所有飞机，`srcIP`和`dstIP`都要对应IP字段内填写的hostname，
-`prefix`为true的情况下，收方（dstIP）的会自动在topic名字前添加namespace，namespace为来源（srcIP）的hostname，防止多对多时收方把
-所有来源对应到同一个topic名上。 
+主要字段说明：
 
-例如上方的例子srcIP为`all_drone`，groundStation0将会收到`/drone0/ekf_quat/ekf_odom`、`/drone1/ekf_quat/ekf_odom`等，分别对应
-来源于drone0和drone1。`same_prefix`为true时，所有收到的topic均为`/bridge/ekf_quat/ekf_odom`
+- `topic_name`：要转发的 ROS topic
+- `msg_type`：ROS 消息类型，格式为 `package/Msg`
+- `srcIP`：发送端主机名，必须来自 `IP` 表
+- `dstIP`：接收端主机名，必须来自 `IP` 表
+- `srcPort`：该转发规则独占的端口
+- `max_freq`：最大发送频率，单位 Hz，`-1` 表示不限制
+- `prefix`：接收端是否自动加来源主机名前缀
+- `same_prefix`：是否统一映射到 `/bridge/...`
 
+图像流额外配置：
 
 ```yaml
-- topic_name: /drone_{id}_ego_planner_node/optimal_list  # keyword {id} will be replaced by drone id
-  msg_type: visualization_msgs/Marker     
-  srcIP: 
-  - all_drone                       
-  srcPort: 3002                  
-  max_freq: 30
-  dstIP: 
-  - groundStation0
-  prefix: false                   
-  same_prefix: false
+  - topic_name: /camera/color/image_raw
+    msg_type: sensor_msgs/Image
+    imgResizeRate: 0.5
+    imgJpegQuality: 85
+    imgAdaptiveQuality: true
+    imgMinJpegQuality: 40
+    imgMaxJpegQuality: 90
+    imgTargetBandwidthKbps: 800
+    imgQualityStep: 5
+    imgAdaptCooldownFrames: 6
 ```
 
-可在topic_name最前面加上`/drone_{id}`的格式，这种格式程序会自动解析id，例如上述例子的groudStation0将会收到，
-`/drone_0_ego_planner_node/optimal_list`、`/drone_1_ego_planner_node/optimal_list`等。
+- `imgResizeRate`：编码前缩放比例
+- `imgJpegQuality`：初始 JPEG 质量
+- `imgAdaptiveQuality`：是否开启自适应质量控制
+- `imgMinJpegQuality` / `imgMaxJpegQuality`：自适应质量上下限
+- `imgTargetBandwidthKbps`：目标带宽
+- `imgQualityStep`：每次调整的质量步长
+- `imgAdaptCooldownFrames`：两次调节之间的冷却帧数
+
+点云额外配置：
+
+```yaml
+  - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
+    msg_type: sensor_msgs/PointCloud2
+    cloudCompress: true
+    cloudDownsample: -1.0
+    cloudCodec: draco
+```
+
+- `cloudCompress`：是否压缩点云
+- `cloudDownsample`：点云降采样参数，`-1.0` 表示关闭
+- `cloudCodec`：当前示例使用 `draco`
+
+多机通配示例：
+
+```yaml
+  - topic_name: /drone_{id}_ego_planner_node/optimal_list
+    msg_type: visualization_msgs/Marker
+    srcIP:
+      - all_drone
+    srcPort: 3002
+    max_freq: 30
+    dstIP:
+      - groundStation0
+    prefix: false
+    same_prefix: false
+```
+
+当 `topic_name` 中包含 `{id}` 时，bridge 会自动替换为对应的无人机编号。比如地面站会收到 `/drone_0_ego_planner_node/optimal_list`、`/drone_1_ego_planner_node/optimal_list` 等。
 
 ### 2.3 Service 配置
 
-service 支持多客户端，一服务端，与前面不同的是，这里的`prefix` 仅表示客户端是否需要添加namespace，服务端无需添加。
-例如，服务端为`drone0`，客户端为`groundStation0`，则服务端的服务名为`/add_two_ints`，客户端需要call的服务名为`/drone0/add_two_ints`
+service 支持单服务端、多客户端。
 
 ```yaml
 services:
-  # --------- Services ---------- #
   - srv_name: /add_two_ints
     srv_type: swarm_ros_bridge/AddTwoInts
     serverIp: drone1
     clientIp:
+      - groundStation0
       - drone2
     srcPort: 2000
     prefix: true
 ```
 
-## 2.4 自定义消息类型
-需添加新的自定义消息，需要修改`include/msgs_macro.hpp`，在上方include自定义消息，在`MSGS_MACRO`里按照格式填写，X宏的第一个参数需和yaml文件内的`msg_type`能够对应上
-```c++
-#ifndef __MSGS_MACRO__
-#define __MSGS_MACRO__
-#include <ros/ros.h>
+当 `prefix: true` 时，客户端调用时需要带服务端主机名前缀。以上例中客户端调用路径应为 `/drone1/add_two_ints`。
 
-#include <std_msgs/String.h>
-#include <nav_msgs/Odometry.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <visualization_msgs/Marker.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <visualization_msgs/MarkerArray.h>
-#include <sensor_msgs/Image.h>
+### 2.4 自定义消息类型
 
-#include <std_srvs/Empty.h>
-#include <swarm_ros_bridge/AddTwoInts.h>
-// include your msg type here
+如果要增加自定义 topic 或 service 类型，需要修改 [`swarm_ros_bridge/include/msgs_macro.hpp`](./swarm_ros_bridge/include/msgs_macro.hpp)：
 
-#define INFO_MSG(str) do {std::cout << str << std::endl; } while(false)
-#define INFO_MSG_RED(str) do {std::cout << "\033[31m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_GREEN(str) do {std::cout << "\033[32m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_YELLOW(str) do {std::cout << "\033[33m" << str << "\033[0m" << std::endl; } while(false)
-#define INFO_MSG_BLUE(str) do {std::cout << "\033[34m" << str << "\033[0m" << std::endl; } while(false)
+1. 引入对应的头文件
+2. 在 `MSGS_MACRO` 或 `SRVS_MACRO` 中追加类型
+3. 在 YAML 中使用完全一致的 `msg_type` 或 `srv_type`
 
-// Use X macro
+示例：
+
+```cpp
+#include <your_pkg/YourMsg.h>
+
 #define MSGS_MACRO \
-  X("sensor_msgs/Image", sensor_msgs::Image)                           \
-  X("std_msgs/String", std_msgs::String)                               \
-  X("nav_msgs/Odometry", nav_msgs::Odometry)                           \
-  X("geometry_msgs/PoseStamped", geometry_msgs::PoseStamped)           \
-  X("sensor_msgs/PointCloud2", sensor_msgs::PointCloud2)               \
-  X("visualization_msgs/Marker", visualization_msgs::Marker)           \
-  X("visualization_msgs/MarkerArray", visualization_msgs::MarkerArray)
-
-#define SRVS_MACRO \
-  X("std_srvs/Empty", std_srvs::Empty) \
-  X("swarm_ros_bridge/AddTwoInts", swarm_ros_bridge::AddTwoInts)
-
-#endif
-
+  X("sensor_msgs/Image", sensor_msgs::Image) \
+  X("your_pkg/YourMsg", your_pkg::YourMsg)
 ```
 
-## 3. 运行
+## 3. 编译与运行
 
-### 3.1 本地模拟
+### 3.1 编译
 
-需创建多个虚拟网卡，可用`sh scripts/create_virtual_interface.sh 4`命令创建，参数为无人机的个数，groundStation默认设置
-为`172.16.0.200`，drone0为`172.16.0.100`，drone1为`172.16.0.101`，以此类推。不需要网卡时可用`scripts/delete_virtual_interface.sh`删除网卡，参数同样为无人机的个数
+在安装好依赖后，放到 catkin 工作空间中进行编译即可。
 
-```yaml
-IP:
-  all: '*'                         # '*' stands for all IPs
-  all_drone: 'all_drone'           # all drone, not include station
-  groundStation0: 172.16.0.200     # laptop (grond station)
-  drone0: 172.16.0.100             
-  drone1: 172.16.0.101
-  drone2: 172.16.0.102
-  drone3: 172.16.0.103
+### 3.2 单机模拟
+
+单机模拟时，需要先创建虚拟网卡：
+
+```bash
+sh swarm_ros_bridge/scripts/create_vitrul_interface.sh 4
 ```
+
+不再需要时删除：
+
+```bash
+sh swarm_ros_bridge/scripts/delete_virtul_interface.sh 4
+```
+
+随后加载模拟配置，例如：
+
 ```xml
 <group ns="bridge">
-    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen" >
-      <param name="hostname" type="string" value="drone1"/>
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
-    </node>
+  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
+    <param name="hostname" type="string" value="drone1"/>
+    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
+  </node>
 </group>
 ```
 
-### 3.2 实机部署
+### 3.3 实机部署
 
-需修改`ip_real.yaml`文件， launch文件的编写方法如下，需要修改载入的yaml文件路径以及自身的识别名
+实机运行时，先修改 `ip_real.yaml`，然后使用仓库内提供的 launch：
+
+- `launch/example_bridge_drone.launch`
+- `launch/example_bridge_station.launch`
+- `launch/bridge_with_tui_drone.launch`
+- `launch/bridge_with_tui_station.launch`
+
+无人机端示例：
 
 ```xml
+<launch>
   <group ns="bridge">
-    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen" >
-      <param name="hostname" type="string" value="drone1"/>
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
+    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
+      <param name="hostname" type="string" value="drone$(env DRONE_ID)"/>
+      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
       <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
     </node>
   </group>
+</launch>
 ```
 
-## 4. Contributor
+地面站示例：
 
-- Weiqi Gai 2025.01 
+```xml
+<launch>
+  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_station_node" output="screen">
+    <param name="hostname" type="string" value="groundStation0"/>
+    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
+    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
+  </node>
+</launch>
+```
+
+## 4. Contributors
+
+- Weiqi Gai 2025.01
 - KengHou Hoi 2024.08
 
 ## Special Thanks
 
--  BestAnHongjun (an.hongjun@foxmail.com) for his github project [PicSocket](https://github.com/BestAnHongjun/PicSocket)
-which helps me a lot in the development of image transmission.
+- BestAnHongjun 和 [PicSocket](https://github.com/BestAnHongjun/PicSocket) 项目，对图像传输部分的实现帮助很大。

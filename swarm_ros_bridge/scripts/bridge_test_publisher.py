@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish deterministic test data for every topic in config/default.yaml."""
+"""Publish deterministic, animated test data for config/default.yaml topics."""
 
 import math
 import random
@@ -39,8 +39,40 @@ def make_sphere_points(count, radius, seed):
     return points
 
 
-def make_color_bars(width, height, frame_id):
-    """Build an RGB8 image containing eight vertical color bars."""
+def animate_sphere_points(points, elapsed, orbit_radius, angular_speed):
+    """Apply deterministic orbit, rotation, and breathing motion to a cloud."""
+    phase = angular_speed * elapsed
+    yaw = phase * 1.7
+    pitch = 0.35 * math.sin(phase * 0.8)
+    cos_yaw = math.cos(yaw)
+    sin_yaw = math.sin(yaw)
+    cos_pitch = math.cos(pitch)
+    sin_pitch = math.sin(pitch)
+    breathing_scale = 1.0 + 0.04 * math.sin(phase * 2.3)
+
+    # This orbit starts at the origin, avoiding a discontinuity at startup.
+    center_x = orbit_radius * math.sin(phase)
+    center_y = orbit_radius * (1.0 - math.cos(phase))
+    center_z = 0.3 * orbit_radius * math.sin(phase * 0.6)
+
+    animated = []
+    for x, y, z in points:
+        yaw_x = cos_yaw * x - sin_yaw * y
+        yaw_y = sin_yaw * x + cos_yaw * y
+        rotated_x = cos_pitch * yaw_x + sin_pitch * z
+        rotated_z = -sin_pitch * yaw_x + cos_pitch * z
+        animated.append(
+            (
+                center_x + breathing_scale * rotated_x,
+                center_y + breathing_scale * yaw_y,
+                center_z + breathing_scale * rotated_z,
+            )
+        )
+    return animated
+
+
+def make_color_bars(width, height, frame_id, offset_pixels=0):
+    """Build an RGB8 image containing horizontally scrolling color bars."""
     colors = (
         (255, 255, 255),
         (255, 255, 0),
@@ -54,7 +86,8 @@ def make_color_bars(width, height, frame_id):
 
     row = bytearray()
     for x in range(width):
-        color_index = min(len(colors) - 1, x * len(colors) // width)
+        shifted_x = (x + offset_pixels) % width
+        color_index = min(len(colors) - 1, shifted_x * len(colors) // width)
         row.extend(colors[color_index])
 
     image = Image()
@@ -75,6 +108,15 @@ class BridgeTestPublisher:
         self.sphere_radius = float(rospy.get_param("~sphere_radius", 5.0))
         self.inflate_offset = float(rospy.get_param("~inflate_offset", 0.35))
         self.random_seed = int(rospy.get_param("~random_seed", 42))
+        self.cloud_motion_radius = float(
+            rospy.get_param("~cloud_motion_radius", 1.5)
+        )
+        self.cloud_motion_speed = float(
+            rospy.get_param("~cloud_motion_speed", 0.5)
+        )
+        self.image_scroll_speed = float(
+            rospy.get_param("~image_scroll_speed", 80.0)
+        )
         self.frame_id = str(rospy.get_param("~frame_id", "world"))
         self.child_frame_id = str(rospy.get_param("~child_frame_id", "base_link"))
         self.camera_frame_id = str(
@@ -89,6 +131,17 @@ class BridgeTestPublisher:
             raise ValueError("~sphere_radius must be greater than zero")
         if self.sphere_radius + self.inflate_offset <= 0.0:
             raise ValueError("~sphere_radius + ~inflate_offset must be greater than zero")
+        if self.cloud_motion_radius < 0.0:
+            raise ValueError("~cloud_motion_radius must not be negative")
+        if not all(
+            math.isfinite(value)
+            for value in (
+                self.cloud_motion_radius,
+                self.cloud_motion_speed,
+                self.image_scroll_speed,
+            )
+        ):
+            raise ValueError("motion parameters must be finite")
 
         self.marker_topic = str(
             rospy.get_param("~marker_topic", DEFAULT_MARKER_TOPIC)
@@ -114,16 +167,22 @@ class BridgeTestPublisher:
         self.odom_publisher = rospy.Publisher(self.odom_topic, Odometry, queue_size=1)
         self.image_publisher = rospy.Publisher(self.image_topic, Image, queue_size=1)
 
-        # Large, static payloads are generated once. Only their headers change at runtime.
-        self.cloud_message = self._make_cloud(False)
-        self.inflated_cloud_message = self._make_cloud(True)
-        self.image_message = make_color_bars(640, 480, self.camera_frame_id)
+        # Keep the random samples deterministic while animating their geometry.
+        self.cloud_points = make_sphere_points(
+            self.point_count, self.sphere_radius, self.random_seed
+        )
+        self.inflated_cloud_points = make_sphere_points(
+            self.point_count,
+            self.sphere_radius + self.inflate_offset,
+            self.random_seed + 1,
+        )
 
         self.sequence = 0
         self.started_at = rospy.Time.now()
 
         rospy.loginfo(
-            "Bridge test publisher: %.3f Hz, %d points/cloud, 640x480 RGB bars",
+            "Bridge test publisher: %.3f Hz, %d animated points/cloud, "
+            "640x480 scrolling RGB bars",
             self.rate_hz,
             self.point_count,
         )
@@ -136,12 +195,16 @@ class BridgeTestPublisher:
             self.image_topic,
         )
 
-    def _make_cloud(self, inflated):
-        radius = self.sphere_radius + self.inflate_offset if inflated else self.sphere_radius
-        seed = self.random_seed + 1 if inflated else self.random_seed
-        points = make_sphere_points(self.point_count, radius, seed)
+    def _make_cloud(self, points, stamp, elapsed):
+        animated_points = animate_sphere_points(
+            points,
+            elapsed,
+            self.cloud_motion_radius,
+            self.cloud_motion_speed,
+        )
         return point_cloud2.create_cloud_xyz32(
-            Header(frame_id=self.frame_id), points
+            Header(seq=self.sequence, stamp=stamp, frame_id=self.frame_id),
+            animated_points,
         )
 
     def _make_markers(self, stamp, elapsed):
@@ -195,18 +258,22 @@ class BridgeTestPublisher:
         stamp = rospy.Time.now()
         elapsed = (stamp - self.started_at).to_sec()
 
-        self.cloud_message.header.seq = self.sequence
-        self.cloud_message.header.stamp = stamp
-        self.inflated_cloud_message.header.seq = self.sequence
-        self.inflated_cloud_message.header.stamp = stamp
-        self.image_message.header.seq = self.sequence
-        self.image_message.header.stamp = stamp
+        cloud_message = self._make_cloud(self.cloud_points, stamp, elapsed)
+        inflated_cloud_message = self._make_cloud(
+            self.inflated_cloud_points, stamp, elapsed
+        )
+        image_offset = int(elapsed * self.image_scroll_speed)
+        image_message = make_color_bars(
+            640, 480, self.camera_frame_id, image_offset
+        )
+        image_message.header.seq = self.sequence
+        image_message.header.stamp = stamp
 
         self.marker_publisher.publish(self._make_markers(stamp, elapsed))
-        self.cloud_publisher.publish(self.cloud_message)
-        self.inflated_cloud_publisher.publish(self.inflated_cloud_message)
+        self.cloud_publisher.publish(cloud_message)
+        self.inflated_cloud_publisher.publish(inflated_cloud_message)
         self.odom_publisher.publish(self._make_odometry(stamp, elapsed))
-        self.image_publisher.publish(self.image_message)
+        self.image_publisher.publish(image_message)
 
         self.sequence = (self.sequence + 1) & 0xFFFFFFFF
 

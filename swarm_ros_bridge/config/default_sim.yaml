@@ -5,6 +5,17 @@ config:
   warn_threshold: 3               # if recv rate smaller than max_freq-warn_threashold, then warn
   monitor_rate_hz: 500            # it must be greater than max_freq
 
+zenoh:
+  mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
+  compression_enabled: false
+  listen_endpoints: []
+  connect_endpoints: []
+  service_timeout_ms: 1000
+  service_worker_threads: 2
+  service_queue_capacity: 64
+
 services:
   # --------- Services ---------- #
   - srv_name: /add_two_ints
@@ -13,16 +24,15 @@ services:
     clientIp:
       - drone2
       - drone3
-    srcPort: 2000
     prefix: true
 
 topics:
   # ---------- Topics ---------- #
   - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
     msg_type: visualization_msgs/MarkerArray
+    qos_class: bulk
     srcIP:
       - drone1
-    srcPort: 3001
     max_freq: 20
     dstIP:
       - drone2
@@ -32,9 +42,9 @@ topics:
 
   - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
     msg_type: sensor_msgs/PointCloud2
+    qos_class: bulk
     srcIP:
       - drone1
-    srcPort: 3002
     max_freq: 5
     dstIP:
       - drone2
@@ -44,9 +54,9 @@ topics:
 
   - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
     msg_type: sensor_msgs/PointCloud2
+    qos_class: bulk
     srcIP:
       - drone1
-    srcPort: 3003
     max_freq: 5
     dstIP:
       - drone2
@@ -56,9 +66,9 @@ topics:
 
   - topic_name: /ekf_quat/ekf_odom
     msg_type: nav_msgs/Odometry
+    qos_class: state
     srcIP:
       - drone1
-    srcPort: 3004
     max_freq: 30
     dstIP:
       - drone2
@@ -68,10 +78,10 @@ topics:
 
   - topic_name: /camera/color/image_raw
     msg_type: sensor_msgs/Image
+    qos_class: bulk
     imgResizeRate: 0.5
     srcIP:
       - drone1
-    srcPort: 3005
     max_freq: 24
     dstIP:
       - drone2

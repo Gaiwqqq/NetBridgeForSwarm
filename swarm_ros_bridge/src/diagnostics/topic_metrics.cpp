@@ -41,6 +41,8 @@ TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& n
   metrics.msg_type = state.msg_type;
   metrics.direction = state.direction;
   metrics.codec = state.codec;
+  metrics.transport = state.transport;
+  metrics.qos_class = state.qos_class;
   metrics.configured_rate_hz = state.configured_rate_hz;
 
   const ros::Time send_window_start =
@@ -85,6 +87,7 @@ TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& n
   metrics.packet_size = state.packet_size;
   metrics.total_messages = state.total_sent + state.total_received;
   metrics.dropped_messages = state.dropped_messages;
+  metrics.transport_queue_drops = state.transport_queue_drops;
   metrics.last_recv_age_ms =
       state.last_recv_time.isZero() ? -1.0 : (now - state.last_recv_time).toSec() * 1000.0;
   metrics.stability_score = ComputeStability(state, metrics.send_rate_hz, metrics.recv_rate_hz);

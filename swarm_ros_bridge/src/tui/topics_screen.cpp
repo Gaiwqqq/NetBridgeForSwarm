@@ -25,6 +25,13 @@ std::string JoinHosts(const std::vector<std::string>& hosts) {
   return joined;
 }
 
+std::string EndEllipsis(const std::string& value, int max_width) {
+  if (max_width <= 3 || static_cast<int>(value.size()) <= max_width) {
+    return value;
+  }
+  return value.substr(0, static_cast<std::size_t>(max_width - 3)) + "...";
+}
+
 std::string CodecLabel(const config::TopicRule& topic) {
   if (topic.msg_type != "sensor_msgs/PointCloud2") {
     return "-";
@@ -148,7 +155,8 @@ void AppendLine(std::vector<ftxui::Element>* lines,
 ftxui::Element DirectionSummary(const std::string& title,
                                 const ftxui::Color& accent,
                                 bool has_info,
-                                const swarm_ros_bridge::NetworkInfo& info) {
+                                const swarm_ros_bridge::NetworkInfo& info,
+                                bool compact) {
   using namespace ftxui;
   const std::string rate =
       has_info ? FormatMetric(info.direction == "send" ? info.send_rate_hz : info.recv_rate_hz,
@@ -159,6 +167,17 @@ ftxui::Element DirectionSummary(const std::string& title,
       has_info ? std::to_string(info.packet_size) + " B" : "--";
   const std::string drops =
       has_info ? std::to_string(info.dropped_messages) : "--";
+  if (compact) {
+    return hbox({
+               text(" " + title + " ") | bold | color(accent),
+               text(rate) | color(Color::White),
+               text("  ") | color(Color::GrayLight),
+               text(bandwidth) | color(Color::White),
+               filler(),
+               text("drop " + drops + " ") | color(Color::GrayLight),
+           }) |
+           bgcolor(Color::RGB(18, 23, 36));
+  }
   return hbox({
              text(title) | bold | color(accent),
              text("  ") ,
@@ -180,12 +199,17 @@ ftxui::Element RenderTopicsScreen(
     const config::BridgeConfig& config,
     const ViewState& state,
     const std::shared_ptr<diagnostics::DiagnosticsCache>& diagnostics_cache,
-    ftxui::Component topic_list) {
+    ftxui::Component topic_list,
+    const LayoutContext& layout) {
   using namespace ftxui;
 
   Element details = text("No topics configured.") | color(Color::GrayLight);
+  Element compact_details =
+      text("No topics configured.") | color(Color::GrayLight);
+  Element short_details = compact_details;
   Element transfer_summary = text("Select a topic to inspect send/recv state.") |
                              color(Color::GrayLight);
+  Element compact_transfer_summary = transfer_summary;
   if (!config.topics.empty()) {
     const int selected_index =
         std::min<int>(state.selected_topic, static_cast<int>(config.topics.size()) - 1);
@@ -210,9 +234,9 @@ ftxui::Element RenderTopicsScreen(
                                               : (has_live_info ? live_info.bandwidth_kbps : 0.0F)));
     const auto pressure_color = BandwidthPressureColor(pressure_bandwidth);
     std::vector<Element> config_lines = {
-        text("Sources: " + JoinHosts(topic.src_hosts)),
-        text("Targets: " + JoinHosts(topic.dst_hosts)),
-        text("Port: " + std::to_string(topic.src_port)),
+        paragraph("Sources: " + JoinHosts(topic.src_hosts)),
+        paragraph("Targets: " + JoinHosts(topic.dst_hosts)),
+        paragraph("Transport: Zenoh / QoS: " + topic.qos_class),
         text("Prefix: " + std::string(topic.prefix ? "on" : "off")),
         text("Same prefix: " + std::string(topic.same_prefix ? "on" : "off")),
     };
@@ -245,9 +269,19 @@ ftxui::Element RenderTopicsScreen(
 
     transfer_summary = vbox({
                            text("Live Transfer") | bold | color(Color::White),
-                           DirectionSummary("SEND", Color::Magenta1, has_send_info, send_info),
-                           DirectionSummary("RECV", Color::CyanLight, has_recv_info, recv_info),
+                           DirectionSummary("SEND", Color::Magenta1,
+                                            has_send_info, send_info,
+                                            layout.compact()),
+                           DirectionSummary("RECV", Color::CyanLight,
+                                            has_recv_info, recv_info,
+                                            layout.compact()),
                        });
+    compact_transfer_summary = vbox({
+        DirectionSummary("SEND", Color::Magenta1, has_send_info, send_info,
+                         true),
+        DirectionSummary("RECV", Color::CyanLight, has_recv_info, recv_info,
+                         true),
+    });
 
     details = vbox({
                   text(topic.topic_name) | bold | color(Color::White),
@@ -271,6 +305,34 @@ ftxui::Element RenderTopicsScreen(
                                            : "--"),
               }) |
               color(Color::GrayLight);
+
+    compact_details = vbox({
+        paragraph(topic.topic_name) | bold | color(Color::White),
+        hbox({
+            text(topic.qos_class + " / ") | color(Color::CyanLight),
+            text(has_live_info ? BandwidthPressure(live_info.bandwidth_kbps)
+                               : "WAIT") |
+                bold | color(pressure_color),
+            filler(),
+            text(has_live_info
+                     ? FormatMetric(live_info.avg_latency_ms, " ms")
+                     : "--") |
+                color(Color::Magenta1),
+        }),
+    });
+    short_details = hbox({
+                        text(" " + EndEllipsis(
+                                        topic.topic_name,
+                                        std::max(8, layout.content_width - 24))) |
+                            bold | color(Color::White),
+                        filler(),
+                        text(topic.qos_class + " ") | color(Color::CyanLight),
+                        text(has_live_info
+                                 ? BandwidthPressure(live_info.bandwidth_kbps)
+                                 : "WAIT") |
+                            bold | color(pressure_color),
+                        text(" "),
+                    });
   }
 
   auto legend = hbox({
@@ -290,9 +352,53 @@ ftxui::Element RenderTopicsScreen(
       transfer_summary,
   });
 
-  return hbox({
-             Panel("Topic Matrix", topic_panel_body) | flex,
-             Panel("Inspector", details) | size(WIDTH, EQUAL, 38),
+  if (layout.wide()) {
+    const int inspector_width =
+        std::max(34, std::min(44, layout.content_width / 3));
+    return hbox({
+               Panel("Topic Matrix", topic_panel_body) | flex,
+               Panel("Inspector", details) |
+                   size(WIDTH, EQUAL, inspector_width),
+           }) |
+           flex;
+  }
+
+  if (layout.compact()) {
+    if (layout.short_height) {
+      return vbox({
+                 topic_list->Render() | frame | vscroll_indicator |
+                     size(HEIGHT, EQUAL,
+                          std::max(1, layout.content_height - 1)),
+                 short_details |
+                     size(HEIGHT, EQUAL, 1) |
+                     bgcolor(Color::RGB(18, 23, 36)),
+             }) |
+             flex;
+    }
+    return vbox({
+               Panel("Topics",
+                     vbox({
+                         topic_list->Render() | frame | vscroll_indicator |
+                             flex,
+                         separator(),
+                         transfer_summary,
+                     })) |
+                   flex,
+               Panel("Selected", compact_details) |
+                   size(HEIGHT, EQUAL, 7),
+           }) |
+           flex;
+  }
+
+  const int inspector_height =
+      std::max(8, std::min(13, layout.content_height / 2));
+  return vbox({
+             Panel("Topics",
+                   topic_list->Render() | frame | vscroll_indicator) |
+                 flex,
+             Panel("Selected",
+                   vbox({compact_details, compact_transfer_summary})) |
+                 size(HEIGHT, EQUAL, inspector_height),
          }) |
          flex;
 }

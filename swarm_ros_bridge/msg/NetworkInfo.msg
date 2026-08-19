@@ -2,6 +2,8 @@ string name
 string msg_type
 string direction
 string codec
+string transport
+string qos_class
 float32 configured_rate_hz
 float32 send_rate_hz
 float32 recv_rate_hz
@@ -17,3 +19,15 @@ float32 target_bandwidth_kbps
 uint32 packet_size
 uint32 total_messages
 uint32 dropped_messages
+bool session_connected
+bool link_connected
+uint64 connected_peer_count
+uint64 connected_router_count
+uint64 reconnect_count
+uint64 transport_queue_drops
+uint64 service_timeouts
+uint64 decode_errors
+string node_hostname
+bool node_online
+uint64 node_state_age_ms
+uint64 node_online_transitions

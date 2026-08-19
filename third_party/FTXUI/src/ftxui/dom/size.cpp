@@ -55,7 +55,8 @@ class Size : public Node {
       switch (constraint_) {
         case LESS_THAN:
         case EQUAL:
-          box.x_max = std::min(box.x_min + value_ + 1, box.x_max);
+          // Box coordinates are inclusive, so N cells end at min + N - 1.
+          box.x_max = std::min(box.x_min + value_ - 1, box.x_max);
           break;
         case GREATER_THAN:
           break;
@@ -64,7 +65,7 @@ class Size : public Node {
       switch (constraint_) {
         case LESS_THAN:
         case EQUAL:
-          box.y_max = std::min(box.y_min + value_ + 1, box.y_max);
+          box.y_max = std::min(box.y_min + value_ - 1, box.y_max);
           break;
         case GREATER_THAN:
           break;

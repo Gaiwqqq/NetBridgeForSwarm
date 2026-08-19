@@ -4,6 +4,7 @@
 #include <ros/ros.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <string>
 
@@ -15,6 +16,8 @@ struct TopicMetrics {
   std::string msg_type;
   std::string direction;
   std::string codec;
+  std::string transport;
+  std::string qos_class;
   double configured_rate_hz{0.0};
   double send_rate_hz{0.0};
   double recv_rate_hz{0.0};
@@ -30,6 +33,7 @@ struct TopicMetrics {
   std::uint32_t packet_size{0};
   std::size_t total_messages{0};
   std::size_t dropped_messages{0};
+  std::uint64_t transport_queue_drops{0};
 };
 
 struct TopicRuntimeState {
@@ -37,10 +41,13 @@ struct TopicRuntimeState {
   std::string msg_type;
   std::string direction;
   std::string codec;
+  std::string transport;
+  std::string qos_class;
   double configured_rate_hz{0.0};
   std::size_t total_sent{0};
   std::size_t total_received{0};
   std::size_t dropped_messages{0};
+  std::uint64_t transport_queue_drops{0};
   std::size_t total_send_bytes{0};
   std::size_t total_recv_bytes{0};
   std::uint32_t packet_size{0};

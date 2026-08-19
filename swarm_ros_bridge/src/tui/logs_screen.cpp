@@ -29,7 +29,7 @@ std::vector<LogLine> BuildPreviewLogs(const config::BridgeConfig& config) {
   logs.push_back({"WARN",
                   "⚠ watch latency, jitter and stability in the live topic matrix",
                   ftxui::Color::YellowLight});
-  logs.push_back({"INFO", "📦 vendored libraries: FTXUI, Draco, pic_sockets",
+  logs.push_back({"INFO", "📦 transport: Zenoh 1.9; vendored libraries: FTXUI, Draco",
                   ftxui::Color::Magenta1});
   return logs;
 }
@@ -37,7 +37,8 @@ std::vector<LogLine> BuildPreviewLogs(const config::BridgeConfig& config) {
 }  // namespace
 
 ftxui::Element RenderLogsScreen(const config::BridgeConfig& config,
-                                const ViewState& state) {
+                                const ViewState& state,
+                                const LayoutContext& layout) {
   using namespace ftxui;
 
   const auto logs = BuildPreviewLogs(config);
@@ -49,7 +50,7 @@ ftxui::Element RenderLogsScreen(const config::BridgeConfig& config,
 
     lines.push_back(hbox({
         text(" " + log.level + " ") | bold | bgcolor(log.color) | color(Color::Black),
-        text(" " + log.message) | color(Color::GrayLight),
+        paragraph(" " + log.message) | color(Color::GrayLight) | flex,
     }));
   }
 
@@ -62,12 +63,29 @@ ftxui::Element RenderLogsScreen(const config::BridgeConfig& config,
                 : color(Color::GrayLight)));
   }
 
+  Element filters = hbox(filter_chips);
+  if (layout.compact() && layout.content_width < 48) {
+    filters = vbox({
+        hbox({filter_chips[0], filter_chips[1]}),
+        hbox({filter_chips[2], filter_chips[3]}),
+    });
+  }
+
+  auto log_lines =
+      vbox(lines.empty() ? std::vector<Element>{text("No logs in this filter.")}
+                         : lines) |
+      frame | vscroll_indicator;
+  if (layout.short_height) {
+    return vbox({
+               filters | bgcolor(Color::RGB(18, 23, 36)),
+               log_lines | flex,
+           }) |
+           flex;
+  }
+
   return vbox({
-             Panel("Filters", hbox(filter_chips)),
-             Panel("Log Preview",
-                   vbox(lines.empty() ? std::vector<Element>{text("No logs in this filter.")}
-                                      : lines) |
-                       frame | vscroll_indicator) |
+             Panel(layout.compact() ? "Level" : "Filters", filters),
+             Panel("Log Preview", log_lines) |
                  flex,
          }) |
          flex;

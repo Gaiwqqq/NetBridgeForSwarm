@@ -1,0 +1,15 @@
+# Overlay for controlled-network QUIC comparison. Replace addresses per host.
+# Secure quic/ endpoints additionally require the Zenoh TLS certificate settings;
+# udp/?rel=1 is unencrypted and must only be used on a trusted, isolated network.
+zenoh:
+  mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
+  compression_enabled: false
+  listen_endpoints:
+    - "udp/0.0.0.0:7447?rel=1;multistream=1;mixed_rel=1"
+  connect_endpoints:
+    - "udp/192.168.123.6:7447?rel=1;multistream=1;mixed_rel=1"
+  service_timeout_ms: 1000
+  service_worker_threads: 2
+  service_queue_capacity: 64

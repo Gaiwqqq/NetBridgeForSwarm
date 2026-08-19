@@ -1,0 +1,2 @@
+# Retained only as a short-term rollback source artifact. NetBridge no longer
+# builds or links this package after the Zenoh transport migration.

@@ -1,139 +1,135 @@
-//
-// Created by gwq on 1/4/25.
-//
-
 #ifndef SRC_TOPIC_FACTORY_H
 #define SRC_TOPIC_FACTORY_H
 
-#include "ros/ros.h"
-#include "Eigen/Eigen"
 #include "diagnostics/topic_metrics.hpp"
 #include "msgs_macro.hpp"
+#include "transport/bridge_transport.hpp"
 #include "transport/draco_pointcloud_codec.hpp"
-#include <cstdio>
-#include <cstdlib>
-#include <thread>
-#include <iostream>
-#include <unistd.h>
-#include <string>
-#include <zmqpp/zmqpp.hpp>
-#include "image_transport/image_transport.h"
-#include "cv_bridge/cv_bridge.h"
-#include "sensor_msgs/image_encodings.h"
-#include "opencv2/opencv.hpp"
-#include "pic_socket.h"
-#include "pcl/point_cloud.h"
-#include "pcl/point_types.h"
-#include "pcl_conversions/pcl_conversions.h"
-#include "pcl/compression/octree_pointcloud_compression.h"
-#include "pcl/filters/voxel_grid.h"
-#include "swarm_ros_bridge/PtCloudCompress.h"
-#include "sensor_msgs/PointCloud2.h"
-#include <mutex>
-#include <memory>
+
 #include <boost/tti/has_data.hpp>
+#include <ros/ros.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #define SUB_QUEUE_SIZE 10
 #define PUB_QUEUE_SIZE 20
 BOOST_TTI_HAS_DATA(to_drone_ids);
 BOOST_TTI_HAS_DATA(header);
 
-struct TopicCfg{
-#define NOT_ONLY_ONE_DST "not_only"
-    std::string name_;
-    std::string raw_name_;
-    std::string type_;
-    std::string src_hostname_;
-    std::string src_ip_;
-    std::string only1_dst_hostname_;
-    std::string my_ip_, my_hostname_;
-    std::vector<std::string> dst_hostname_;
-    XmlRpc::XmlRpcValue src_hostnames_xml;
-    XmlRpc::XmlRpcValue dst_hostnames_xml;
-    std::map<std::string, bool> dst_hostname_map_, src_hostname_map_, src_ip_map_, dst_ip_map_;
-    double max_freq_{10.0f};
-    double img_resize_rate_{1.0f};
-    int img_jpeg_quality_{80};
-    bool img_adaptive_quality_{false};
-    int img_min_jpeg_quality_{45};
-    int img_max_jpeg_quality_{90};
-    double img_target_bandwidth_kbps_{1200.0};
-    int img_quality_step_{5};
-    int img_adapt_cooldown_frames_{8};
-    int  port_;
-    bool cloud_compress_{false};
-    double cloud_downsample_{-1};
-    std::string cloud_codec_{"raw"};
-    bool has_prefix_{true};
-    bool same_prefix_{false};
-    bool dynamic_dst_{false};
+struct TopicCfg {
+  std::string name_;
+  std::string raw_name_;
+  std::string wire_name_;
+  std::string type_;
+  std::string src_hostname_;
+  std::string my_hostname_;
+  XmlRpc::XmlRpcValue src_hostnames_xml;
+  XmlRpc::XmlRpcValue dst_hostnames_xml;
+  std::map<std::string, bool> dst_hostname_map_;
+  std::map<std::string, bool> src_hostname_map_;
+  double max_freq_{10.0};
+  double img_resize_rate_{1.0};
+  int img_jpeg_quality_{80};
+  bool img_adaptive_quality_{false};
+  int img_min_jpeg_quality_{45};
+  int img_max_jpeg_quality_{90};
+  double img_target_bandwidth_kbps_{1200.0};
+  int img_quality_step_{5};
+  int img_adapt_cooldown_frames_{8};
+  bool cloud_compress_{false};
+  double cloud_downsample_{-1};
+  std::string cloud_codec_{"raw"};
+  bool has_prefix_{true};
+  bool same_prefix_{false};
+  bool dynamic_dst_{false};
+  swarm_ros_bridge::transport::QosClass qos_class_{
+      swarm_ros_bridge::transport::QosClass::kState};
 };
 
-class TopicFactory
-{
-public:
-    enum SEND_OR_RECV{ SEND, RECV };
-    typedef std::shared_ptr<TopicFactory> Ptr;
-    TopicFactory(const TopicCfg& topic_cfg,
-                 const std::map<std::string, std::string>& ip_map,
-                 SEND_OR_RECV send_or_recv,
-                 const std::shared_ptr<ros::NodeHandle>& nh_public);
-    ~TopicFactory();
-    void createThread();
-    void stopThread();
-    swarm_ros_bridge::diagnostics::TopicMetrics GetMetricsSnapshot() const;
+class TopicFactory {
+ public:
+  enum SEND_OR_RECV { SEND, RECV };
+  using Ptr = std::shared_ptr<TopicFactory>;
 
-private:
-    TopicCfg topic_cfg_;
-    SEND_OR_RECV send_or_recv_;
-    std::unique_ptr<zmqpp::socket>  sender_, receiver_;
-    std::unique_ptr<UDPImgSender>   udp_sender_;
-    std::unique_ptr<UDPImgReceiver> udp_receiver_;
-    std::map<std::string, std::unique_ptr<zmqpp::socket>> dynamic_senders_;
-    zmqpp::context_t context_;
-    std::map<std::string, std::string> ip_map_;
+  TopicFactory(const TopicCfg& topic_cfg,
+               std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transport,
+               SEND_OR_RECV send_or_recv,
+               const std::shared_ptr<ros::NodeHandle>& nh_public);
+  ~TopicFactory();
 
-    ros::Time       sub_last_time_;
-    int             send_num_;
-    ros::Subscriber sub_;
-    ros::Publisher  pub_;
-    bool            recv_thread_flag_;
-    bool            recv_flag_last_;
-    std::thread     recv_thread_;
-    std::mutex      recv_mutex_;
-    swarm_ros_bridge::transport::DracoPointCloudCodec draco_codec_;
-    mutable std::mutex metrics_mutex_;
-    swarm_ros_bridge::diagnostics::TopicRuntimeState metrics_state_;
+  void createThread();
+  void stopThread();
+  swarm_ros_bridge::diagnostics::TopicMetrics GetMetricsSnapshot() const;
 
-    void recvFunction();
-    bool sendFreqControl();
-    int currentImageJpegQuality() const;
-    void recordSend(std::size_t bytes);
-    void recordDrop();
-    void recordReceive(std::size_t bytes, double latency_ms);
-    void pruneMetricsWindowLocked(const ros::Time& now);
-    void maybeAdaptImageQualityLocked(const ros::Time& now);
-    static double inferLatencyMs(const std_msgs::Header& header);
-    static void computeLatencyStats(double latency_ms,
-                                    swarm_ros_bridge::diagnostics::TopicRuntimeState* state);
+ private:
+  TopicCfg topic_cfg_;
+  SEND_OR_RECV send_or_recv_;
+  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transport_;
+  std::shared_ptr<swarm_ros_bridge::transport::TransportPublisher> sender_;
+  std::map<std::string,
+           std::shared_ptr<swarm_ros_bridge::transport::TransportPublisher>>
+      dynamic_senders_;
+  std::shared_ptr<swarm_ros_bridge::transport::TransportSubscription> subscription_;
 
-    template <typename T>
-    void subCallback(const ros::MessageEvent<const T> &event);
+  ros::Time sub_last_time_;
+  ros::Subscriber sub_;
+  ros::Publisher pub_;
+  std::atomic<bool> recv_thread_flag_{false};
+  std::thread recv_thread_;
+  std::mutex recv_mutex_;
+  std::condition_variable recv_condition_;
+  std::deque<swarm_ros_bridge::transport::TransportEnvelope> recv_queue_;
+  std::atomic<std::uint64_t> sequence_{0};
+  swarm_ros_bridge::transport::DracoPointCloudCodec draco_codec_;
+  mutable std::mutex metrics_mutex_;
+  swarm_ros_bridge::diagnostics::TopicRuntimeState metrics_state_;
 
-    template <typename T>
-    ros::Subscriber nh_sub(std::string topic_name, const std::shared_ptr<ros::NodeHandle> &nh);
+  void enqueueEnvelope(swarm_ros_bridge::transport::TransportEnvelope&& envelope);
+  void recvFunction();
+  bool sendFreqControl();
+  int currentImageJpegQuality() const;
+  void recordSend(std::size_t bytes);
+  void recordDrop();
+  void recordTransportQueueDrop();
+  void recordReceive(std::size_t bytes, double latency_ms);
+  void pruneMetricsWindowLocked(const ros::Time& now);
+  void maybeAdaptImageQualityLocked(const ros::Time& now);
+  static double inferLatencyMs(std::int64_t source_time_ns);
+  static void computeLatencyStats(
+      double latency_ms,
+      swarm_ros_bridge::diagnostics::TopicRuntimeState* state);
 
-    ros::Subscriber topicSubscriber(const std::string& topic_name, std::string msg_type,
-                                    const std::shared_ptr<ros::NodeHandle>& nh);
-    static ros::Publisher  topicPublisher(const std::string& topic_name, std::string msg_type,
-                                          const std::shared_ptr<ros::NodeHandle>& nh);
-    void deserializePublish(uint8_t *buffer_ptr, size_t msg_size, std::string msg_type);
+  template <typename T>
+  void subCallback(const ros::MessageEvent<const T>& event);
 
-    template <typename T>
-    void deserializePub(uint8_t *buffer_ptr, size_t msg_size);
+  template <typename T>
+  ros::Subscriber nh_sub(const std::string& topic_name,
+                         const std::shared_ptr<ros::NodeHandle>& nh);
 
-    template <typename T>
-    void ptCloudProcess(const T& msg, size_t & data_len, std::unique_ptr<uint8_t[]>& data);
+  ros::Subscriber topicSubscriber(const std::string& topic_name,
+                                  const std::string& msg_type,
+                                  const std::shared_ptr<ros::NodeHandle>& nh);
+  static ros::Publisher topicPublisher(const std::string& topic_name,
+                                       const std::string& msg_type,
+                                       const std::shared_ptr<ros::NodeHandle>& nh);
+  void deserializePublish(
+      const swarm_ros_bridge::transport::TransportEnvelope& envelope);
+
+  template <typename T>
+  void deserializePub(
+      const swarm_ros_bridge::transport::TransportEnvelope& envelope);
+
+  template <typename T>
+  void ptCloudProcess(const T& msg, std::vector<std::uint8_t>* data);
 };
 
-#endif //SRC_TOPIC_FACTORY_H
+#endif  // SRC_TOPIC_FACTORY_H

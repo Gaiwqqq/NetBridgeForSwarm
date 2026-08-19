@@ -6,6 +6,19 @@ config:
   warn_threshold: 3               # if recv rate smaller than max_freq-warn_threashold, then warn
   monitor_rate_hz: 500            # it must be greater than max_freq
 
+zenoh:
+  mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
+  compression_enabled: false      # JPEG/Draco are already compressed
+  listen_endpoints: []            # default peer listener; set explicit TCP/QUIC endpoints for tests
+  connect_endpoints: []           # static seed peers when multicast is unavailable
+  seed_from_ip_table: false
+  seed_port: 7447
+  service_timeout_ms: 1000
+  service_worker_threads: 2
+  service_queue_capacity: 64
+
 services:
   # --------- Services ---------- #
   - srv_name: /add_two_ints
@@ -14,16 +27,15 @@ services:
     clientIp:
       - groundStation0
       - drone2
-    srcPort: 2000
     prefix: true
 
 topics:
 # --------- Swarm Info ---------- #
 - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
   msg_type: visualization_msgs/MarkerArray
+  qos_class: bulk
   srcIP:
     - drone1
-  srcPort: 3001
   max_freq: 20
   dstIP:
     - groundStation0
@@ -32,12 +44,12 @@ topics:
 
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
   msg_type: sensor_msgs/PointCloud2
+  qos_class: bulk
   cloudCompress: true
   cloudDownsample: -1.0
   cloudCodec: draco
   srcIP:
     - drone1
-  srcPort: 3002
   max_freq: 5
   dstIP:
     - groundStation0
@@ -46,12 +58,12 @@ topics:
 
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
   msg_type: sensor_msgs/PointCloud2
+  qos_class: bulk
   cloudCompress: true
   cloudDownsample: -1.0
   cloudCodec: draco
   srcIP:
     - drone1
-  srcPort: 3003
   max_freq: 5
   dstIP:
     - groundStation0
@@ -60,9 +72,9 @@ topics:
 
 - topic_name: /ekf_quat/ekf_odom
   msg_type: nav_msgs/Odometry
+  qos_class: state
   srcIP:
     - drone1
-  srcPort: 3004
   max_freq: 30
   dstIP:
     - groundStation0
@@ -71,9 +83,9 @@ topics:
 
 # - topic_name: /goal_with_id_from_station
 #   msg_type: quadrotor_msgs/GoalSet
+#   qos_class: command
 #   srcIP:
 #     - groundStation0
-#   srcPort: 3006
 #   max_freq: -1
 #   dstIP:
 #     - drone0
@@ -82,6 +94,7 @@ topics:
 
 - topic_name: /camera/color/image_raw
   msg_type: sensor_msgs/Image
+  qos_class: bulk
   imgResizeRate: 0.5
   imgJpegQuality: 85
   imgAdaptiveQuality: true
@@ -92,13 +105,11 @@ topics:
   imgAdaptCooldownFrames: 6
   srcIP:
     - drone1
-  srcPort: 3005
   max_freq: 24
   dstIP:
     - groundStation0
   prefix: false
   same_prefix: false
-
 
 
 

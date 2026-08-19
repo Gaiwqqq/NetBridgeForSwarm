@@ -65,7 +65,9 @@ void LoadTopicRules(const XmlRpc::XmlRpcValue& topics, BridgeConfig* config) {
     rule.msg_type = GetString(topic_xml["msg_type"]);
     LoadHosts(topic_xml["srcIP"], &rule.src_hosts);
     LoadHosts(topic_xml["dstIP"], &rule.dst_hosts);
-    rule.src_port = static_cast<int>(topic_xml["srcPort"]);
+    if (topic_xml.hasMember("qos_class")) {
+      rule.qos_class = GetString(topic_xml["qos_class"]);
+    }
     rule.max_freq_hz = GetDouble(topic_xml["max_freq"], rule.max_freq_hz);
     rule.prefix = GetBoolMember(topic_xml, "prefix", rule.prefix);
     rule.same_prefix = GetBoolMember(topic_xml, "same_prefix", rule.same_prefix);
@@ -113,7 +115,6 @@ void LoadServiceRules(const XmlRpc::XmlRpcValue& services, BridgeConfig* config)
     rule.service_type = GetString(service_xml["srv_type"]);
     rule.server_host = GetString(service_xml["serverIp"]);
     LoadHosts(service_xml["clientIp"], &rule.client_hosts);
-    rule.src_port = static_cast<int>(service_xml["srcPort"]);
     rule.prefix = GetBoolMember(service_xml, "prefix", rule.prefix);
     config->services.push_back(rule);
   }
@@ -149,6 +150,37 @@ bool ConfigLoader::LoadFromRosParams(const ros::NodeHandle& nh, BridgeConfig* co
     for (auto it = ip_xml.begin(); it != ip_xml.end(); ++it) {
       config->ip_map[it->first] = GetString(it->second);
     }
+  }
+
+  XmlRpc::XmlRpcValue hosts_xml;
+  if (nh.getParam("hosts", hosts_xml) &&
+      hosts_xml.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+    config->ip_map.clear();
+    for (int i = 0; i < hosts_xml.size(); ++i) {
+      config->ip_map[GetString(hosts_xml[i])] = "Zenoh discovery";
+    }
+  }
+
+  XmlRpc::XmlRpcValue zenoh_xml;
+  if (nh.getParam("zenoh", zenoh_xml) &&
+      zenoh_xml.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
+    if (zenoh_xml.hasMember("mode")) {
+      config->zenoh.mode = GetString(zenoh_xml["mode"]);
+    }
+    config->zenoh.multicast_scouting = GetBoolMember(
+        zenoh_xml, "multicast_scouting", config->zenoh.multicast_scouting);
+    config->zenoh.gossip_scouting = GetBoolMember(
+        zenoh_xml, "gossip_scouting", config->zenoh.gossip_scouting);
+    config->zenoh.compression_enabled = GetBoolMember(
+        zenoh_xml, "compression_enabled", config->zenoh.compression_enabled);
+    if (zenoh_xml.hasMember("listen_endpoints")) {
+      LoadHosts(zenoh_xml["listen_endpoints"], &config->zenoh.listen_endpoints);
+    }
+    if (zenoh_xml.hasMember("connect_endpoints")) {
+      LoadHosts(zenoh_xml["connect_endpoints"], &config->zenoh.connect_endpoints);
+    }
+    config->zenoh.service_timeout_ms = GetIntMember(
+        zenoh_xml, "service_timeout_ms", config->zenoh.service_timeout_ms);
   }
 
   XmlRpc::XmlRpcValue topics_xml;

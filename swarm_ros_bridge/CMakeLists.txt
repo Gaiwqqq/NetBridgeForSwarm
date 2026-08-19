@@ -1,7 +1,8 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.16)
 project(swarm_ros_bridge)
 
-add_compile_options(-std=c++17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_program(CCACHE_FOUND ccache)
 set(CMAKE_BUILD_TYPE "Release")
 SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g -ggdb")
@@ -33,9 +34,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   roslib
   topic_tools
-#        cv_bridge
   cv_bridge_noetic_fit_version
-  pic_sockets
   image_transport
   message_generation
   std_msgs
@@ -49,6 +48,8 @@ find_package(PCL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(JPEG REQUIRED)
+find_package(zenohc 1.9.0 EXACT REQUIRED CONFIG)
+find_package(zenohcxx 1.9.0 EXACT REQUIRED CONFIG)
 
 add_message_files(
   FILES
@@ -71,7 +72,7 @@ generate_messages(
 
 catkin_package(
    INCLUDE_DIRS include
-   CATKIN_DEPENDS message_runtime cv_bridge_noetic_fit_version pic_sockets
+   CATKIN_DEPENDS message_runtime cv_bridge_noetic_fit_version
 )
 
 include_directories(
@@ -88,16 +89,6 @@ include_directories(
     ${SWARM_ROS_BRIDGE_VENDOR_DIR}/draco/src
 )
 
-catkin_install_python(PROGRAMS
-    scripts/listener.py
-    scripts/talker.py
-    scripts/odom_talker.py
-    scripts/drone_talker.py
-    scripts/goalset_talker.py
-    scripts/bridge_test_publisher.py
-    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
 add_executable(bridge_new
     src/bridge_node_main.cpp
     src/bridge_factory.cpp
@@ -110,6 +101,8 @@ add_executable(bridge_new
     src/diagnostics/topic_metrics.cpp
     src/transport/pointcloud_codec.cpp
     src/transport/draco_pointcloud_codec.cpp
+    src/transport/bridge_transport.cpp
+    src/transport/zenoh_transport.cpp
 )
 add_dependencies(bridge_new
         ${${PROJECT_NAME}_EXPORTED_TARGETS}
@@ -118,12 +111,11 @@ add_dependencies(bridge_new
 target_link_libraries(bridge_new
     ${catkin_LIBRARIES}
     ${OpenCV_LIBS}
-    zmq
-    zmqpp
     pthread
     ${JPEG_LIBRARIES}
     ${PCL_LIBRARIES}
     draco::draco
+    zenohcxx::zenohc
 )
 
 add_executable(bridge_tui
@@ -179,3 +171,30 @@ add_dependencies(a_simple_client
 target_link_libraries(a_simple_client
         ${catkin_LIBRARIES}
 )
+
+enable_testing()
+add_executable(test_bridge_transport
+    test/bridge_transport_test.cpp
+    src/transport/bridge_transport.cpp
+)
+target_include_directories(test_bridge_transport PRIVATE include)
+add_test(NAME bridge_transport_wire COMMAND test_bridge_transport)
+
+add_executable(test_zenoh_transport_smoke
+    test/zenoh_transport_smoke_test.cpp
+    src/transport/bridge_transport.cpp
+    src/transport/zenoh_transport.cpp
+)
+target_include_directories(test_zenoh_transport_smoke PRIVATE include)
+target_link_libraries(test_zenoh_transport_smoke
+    pthread
+    zenohcxx::zenohc
+)
+add_test(NAME zenoh_transport_smoke COMMAND test_zenoh_transport_smoke)
+
+add_executable(test_tui_layout
+    test/tui_layout_test.cpp
+)
+target_include_directories(test_tui_layout PRIVATE include)
+target_link_libraries(test_tui_layout ftxui::ftxui)
+add_test(NAME tui_responsive_layout COMMAND test_tui_layout)

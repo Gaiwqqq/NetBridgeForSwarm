@@ -2,6 +2,7 @@
 #define SWARM_ROS_BRIDGE_TUI_LOGS_SCREEN_HPP_
 
 #include "config/bridge_config.hpp"
+#include "tui/screen_common.hpp"
 #include "tui/view_state.hpp"
 
 #include <ftxui/dom/elements.hpp>
@@ -10,7 +11,8 @@ namespace swarm_ros_bridge {
 namespace tui {
 
 ftxui::Element RenderLogsScreen(const config::BridgeConfig& config,
-                                const ViewState& state);
+                                const ViewState& state,
+                                const LayoutContext& layout);
 
 }  // namespace tui
 }  // namespace swarm_ros_bridge

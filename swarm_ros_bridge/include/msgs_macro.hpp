@@ -18,11 +18,11 @@
 #include <swarm_ros_bridge/AddTwoInts.h>
 // include your msg type here
 
-#define INFO_MSG(str)        BRIDGE_LOG_INFO("Legacy", "", str)
-#define INFO_MSG_RED(str)    BRIDGE_LOG_ERROR("Legacy", "", str)
-#define INFO_MSG_GREEN(str)  BRIDGE_LOG_INFO("Legacy", "", str)
-#define INFO_MSG_YELLOW(str) BRIDGE_LOG_WARN("Legacy", "", str)
-#define INFO_MSG_BLUE(str)   BRIDGE_LOG_INFO("Legacy", "", str)
+#define INFO_MSG(str)        BRIDGE_LOG_INFO("Zenoh", "", str)
+#define INFO_MSG_RED(str)    BRIDGE_LOG_ERROR("Zenoh", "", str)
+#define INFO_MSG_GREEN(str)  BRIDGE_LOG_INFO("Zenoh", "", str)
+#define INFO_MSG_YELLOW(str) BRIDGE_LOG_WARN("Zenoh", "", str)
+#define INFO_MSG_BLUE(str)   BRIDGE_LOG_INFO("Zenoh", "", str)
 
 // Use X macro
 #define MSGS_MACRO \
@@ -39,4 +39,3 @@
   X("swarm_ros_bridge/AddTwoInts", swarm_ros_bridge::AddTwoInts)
 
 #endif
-

@@ -13,7 +13,7 @@ struct TopicRule {
   std::string msg_type;
   std::vector<std::string> src_hosts;
   std::vector<std::string> dst_hosts;
-  int src_port{0};
+  std::string qos_class{"state"};
   double max_freq_hz{10.0};
   bool prefix{true};
   bool same_prefix{false};
@@ -35,8 +35,17 @@ struct ServiceRule {
   std::string service_type;
   std::string server_host;
   std::vector<std::string> client_hosts;
-  int src_port{0};
   bool prefix{true};
+};
+
+struct ZenohOptions {
+  std::string mode{"peer"};
+  bool multicast_scouting{true};
+  bool gossip_scouting{true};
+  bool compression_enabled{false};
+  std::vector<std::string> listen_endpoints;
+  std::vector<std::string> connect_endpoints;
+  int service_timeout_ms{1000};
 };
 
 struct RuntimeOptions {
@@ -50,6 +59,7 @@ struct RuntimeOptions {
 struct BridgeConfig {
   std::string hostname;
   std::map<std::string, std::string> ip_map;
+  ZenohOptions zenoh;
   RuntimeOptions runtime;
   std::vector<TopicRule> topics;
   std::vector<ServiceRule> services;

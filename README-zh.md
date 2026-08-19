@@ -1,291 +1,148 @@
-# NetBridgeForSwarm V1.1 BETA PREVIEW [English](README.md)
+# NetBridgeForSwarm（Zenoh 1.9） [English](README.md)
 
-## 0. V1.1 新增内容
+NetBridgeForSwarm 是面向 ROS1 Noetic 多机系统的通信 bridge。当前版本使用一个进程级共享 Zenoh session 统一承载 topic、图像、点云与 service，同时保留 ROS 序列化、JPEG 自适应质量、Draco/PCL 点云压缩、前缀规则及 `to_drone_ids` 定向路由。
 
-- 支持 `sensor_msgs/PointCloud2` 压缩传输，显著降低带宽占用。
-- 支持 `sensor_msgs/PointCloud2` 发送前降采样。
-- 支持点云 `Draco` 编解码。
-- 支持图像流自适应 JPEG 质量控制。
-- 增加终端诊断界面 `bridge_tui`。
+主要变化：
 
-## 1. 项目介绍
+- 移除 ZeroMQ、每 topic 独立端口和自研 UDP 图像分片运行时依赖。
+- topic 使用 Zenoh pub/sub，service 使用 query/reply。
+- 使用版本化 `NBZ1` envelope，携带来源、序号、源时间、ROS type/MD5、header 与 payload 类型。
+- Zenoh 回调只写入有界队列；ROS 解码和发布由可停止、可 join 的 worker 执行。
+- `state`/`bulk` 队列丢旧保新，避免图像或点云积压；`command`/service 使用阻塞拥塞策略。
+- 图像通过 Zenoh 传输 JPEG，并恢复原始 `seq/stamp/frame_id`。
 
-ROS1 在多机通信场景里一直不够友好，很多现有方案与具体工程耦合较深，不方便在无人机集群和地面站混合部署时复用。
+## 依赖与编译
 
-NetBridgeForSwarm 是一个面向 ROS1 的多机通信中间件，支持转发：
+基础依赖包括 ROS Noetic/catkin、OpenCV、PCL、JPEG、仓库内置 FTXUI 与 Draco，以及固定版本的 `zenoh-c`/`zenoh-cpp` 1.9.0。
 
-- ROS topic
-- ROS service
-- 图像流 `sensor_msgs/Image`
-- 自定义消息与服务类型
-
-本项目受到 Peixuan Shu 的开源项目 [swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge) 启发，并在此基础上扩展了更灵活的配置方式、图像传输能力、点云传输能力以及更完整的诊断支持。
-
-### 1.1 主要功能
-
-- 所有节点共用一套 YAML 配置。
-- 通过 `include/msgs_macro.hpp` 扩展自定义 topic / service 类型。
-- 图像通过 UDP 传输，支持缩放和自适应 JPEG 质量调节。
-- topic 和 service 通过 TCP 转发。
-- 点云支持压缩、降采样与 Draco codec。
-- 可选 TUI 界面查看主机、topic 和日志状态。
-
-### 1.2 依赖
+官方 GNU Zenoh 1.9.0 二进制不能直接运行于 Ubuntu 20.04（GLIBC 2.31）。请分别在 x86_64 和 ARM64 的 Ubuntu 20.04 构建机上生成原生 Debian 包：
 
 ```bash
-sudo apt-get install libzmqpp-dev ros-noetic-topic-tools
+sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
+# 安装 Rust 1.93 工具链后：
+./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
+  --work-dir /tmp/zenoh-1.9-build \
+  --output-dir ./zenoh-debs
+sudo dpkg -i ./zenoh-debs/*.deb
 ```
 
-此外还依赖：
+脚本固定 tag `1.9.0`，启用 Zenoh reliability API，关闭 shared-memory，并输出 `libzenohc`、开发头文件及 `zenoh-cpp` 包。不要把其他发行版构建出的包复制到 Ubuntu 20.04。
 
-- ROS Noetic / catkin
-- `cv_bridge_noetic_fit_version`
-- OpenCV
-- PCL
-- JPEG
-- 仓库内置第三方库：`FTXUI`、`draco`
+随后在工作空间根目录编译：
 
-如果你使用自定义 OpenCV，需要重新编译 `cv_bridge`，并替换为适配版本的 `cv_bridge_noetic_fit_version`。
-
-示例：
-
-```cmake
-find_package(OpenCV 4.5.3 REQUIRED)
-catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
+```bash
+source /opt/ros/noetic/setup.bash
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
-## 2. 配置说明
+## 配置
 
-主要配置文件位于 [`swarm_ros_bridge/config`](./swarm_ros_bridge/config)：
-
-- `default.yaml`：实机示例配置
-- `default_sim.yaml`：单机模拟示例配置
-- `ip_real.yaml`：实机 IP 映射
-- `ip_sim.yaml`：模拟 IP 映射
-
-### 2.1 IP 配置
-
-每个 bridge 节点都通过 ROS 参数 `hostname` 标识自己，这个值必须出现在 `IP` 映射表中。
+主机目录不再包含端口或必需 IP：
 
 ```yaml
-IP:
-  all: '*'
-  all_drone: 'all_drone'
-  groundStation0: 172.16.0.200
-  drone0: 172.16.0.100
-  drone1: 172.16.0.101
-  drone2: 172.16.0.102
-  drone3: 172.16.0.103
+hosts:
+  - groundStation0
+  - drone1
+  - drone2
 ```
 
-注意：
+旧 `IP` map 仍可作为临时 host/seed 来源，但新部署应使用 `hosts`。`all` 与 `all_drone` 只在路由数组中作为选择器使用。
 
-- `all` 和 `all_drone` 是保留关键字，不能删除。
-- 无人机命名必须使用 `drone0`、`drone1` 这种格式。
-- `drone_1` 这类名字不会被解析成 drone id。
-
-全局配置示例：
+Zenoh 全局配置：
 
 ```yaml
-config:
-  debug: false
-  odom_convert: true
-  monitor_node: true
-  warn_threshold: 3
-  monitor_rate_hz: 500
+zenoh:
+  mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
+  compression_enabled: false
+  listen_endpoints: []
+  connect_endpoints: []
+  seed_from_ip_table: false
+  seed_port: 7447
+  service_timeout_ms: 1000
+  service_worker_threads: 2
+  service_queue_capacity: 64
 ```
 
-### 2.2 Topic 配置
+组播被机载网络过滤时，在 `connect_endpoints` 中加入一个或多个静态 peer，例如 `tcp/192.168.123.6:7447`。TCP 与 QUIC 的对照配置见 [`zenoh_quic_example.yaml`](swarm_ros_bridge/config/zenoh_quic_example.yaml)。QUIC mixed reliability 只有在本项目构建脚本启用的 unstable reliability API 下才会把 `Reliable` 与 `BestEffort` 分别映射到 stream/datagram；官方配置语法见 [Zenoh QUIC 文档](https://zenoh.io/docs/manual/quic/)。
 
-示例：
+每条 topic 必须提供 `qos_class`：
 
 ```yaml
 topics:
   - topic_name: /ekf_quat/ekf_odom
     msg_type: nav_msgs/Odometry
-    srcIP:
-      - drone1
-    srcPort: 3004
+    qos_class: state
+    srcIP: [drone1]
+    dstIP: [groundStation0]
     max_freq: 30
-    dstIP:
-      - groundStation0
     prefix: false
     same_prefix: false
 ```
 
-主要字段说明：
+| 类别 | Zenoh 设置 | 用途 |
+|---|---|---|
+| `command` | Reliable / RealTime / Block / Express | 一次性控制、目标与模式切换 |
+| `state` | BestEffort / DataHigh / Drop / Express | Odometry 等连续状态，接收队列只留最新 |
+| `bulk` | BestEffort / DataLow / Drop | Image、PointCloud2、MarkerArray，接收队列只留最新 |
+| service | Reliable / InteractiveHigh / Block / Express | 固定由 bridge 使用，默认超时 1000 ms |
 
-- `topic_name`：要转发的 ROS topic
-- `msg_type`：ROS 消息类型，格式为 `package/Msg`
-- `srcIP`：发送端主机名，必须来自 `IP` 表
-- `dstIP`：接收端主机名，必须来自 `IP` 表
-- `srcPort`：该转发规则独占的端口
-- `max_freq`：最大发送频率，单位 Hz，`-1` 表示不限制
-- `prefix`：接收端是否自动加来源主机名前缀
-- `same_prefix`：是否统一映射到 `/bridge/...`
+不再支持 `srcPort`。`srcIP`/`dstIP` 字段名为兼容现有配置宏暂时保留，但其中的值是 host 名，不是 IP。
 
-图像流额外配置：
+图像仍支持 `imgResizeRate`、`imgJpegQuality`、`imgAdaptiveQuality`、质量上下限、目标带宽和调节步长。点云仍支持 `cloudCompress`、`cloudDownsample` 以及 `draco`/`pcl_octree` codec。Zenoh 通用压缩默认关闭，避免重复压缩 JPEG/Draco。
 
-```yaml
-  - topic_name: /camera/color/image_raw
-    msg_type: sensor_msgs/Image
-    imgResizeRate: 0.5
-    imgJpegQuality: 85
-    imgAdaptiveQuality: true
-    imgMinJpegQuality: 40
-    imgMaxJpegQuality: 90
-    imgTargetBandwidthKbps: 800
-    imgQualityStep: 5
-    imgAdaptCooldownFrames: 6
-```
-
-- `imgResizeRate`：编码前缩放比例
-- `imgJpegQuality`：初始 JPEG 质量
-- `imgAdaptiveQuality`：是否开启自适应质量控制
-- `imgMinJpegQuality` / `imgMaxJpegQuality`：自适应质量上下限
-- `imgTargetBandwidthKbps`：目标带宽
-- `imgQualityStep`：每次调整的质量步长
-- `imgAdaptCooldownFrames`：两次调节之间的冷却帧数
-
-点云额外配置：
-
-```yaml
-  - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
-    msg_type: sensor_msgs/PointCloud2
-    cloudCompress: true
-    cloudDownsample: -1.0
-    cloudCodec: draco
-```
-
-- `cloudCompress`：是否压缩点云
-- `cloudDownsample`：点云降采样参数，`-1.0` 表示关闭
-- `cloudCodec`：当前示例使用 `draco`
-
-多机通配示例：
-
-```yaml
-  - topic_name: /drone_{id}_ego_planner_node/optimal_list
-    msg_type: visualization_msgs/Marker
-    srcIP:
-      - all_drone
-    srcPort: 3002
-    max_freq: 30
-    dstIP:
-      - groundStation0
-    prefix: false
-    same_prefix: false
-```
-
-当 `topic_name` 中包含 `{id}` 时，bridge 会自动替换为对应的无人机编号。比如地面站会收到 `/drone_0_ego_planner_node/optimal_list`、`/drone_1_ego_planner_node/optimal_list` 等。
-
-### 2.3 Service 配置
-
-service 支持单服务端、多客户端。
+service 配置不再需要端口：
 
 ```yaml
 services:
   - srv_name: /add_two_ints
     srv_type: swarm_ros_bridge/AddTwoInts
     serverIp: drone1
-    clientIp:
-      - groundStation0
-      - drone2
-    srcPort: 2000
+    clientIp: [groundStation0, drone2]
     prefix: true
 ```
 
-当 `prefix: true` 时，客户端调用时需要带服务端主机名前缀。以上例中客户端调用路径应为 `/drone1/add_two_ints`。
+客户端调用 `/drone1/add_two_ints`。服务端还会根据 envelope 的来源 host、service type 与 MD5 拒绝未授权或不匹配的请求。
 
-### 2.4 自定义消息类型
+## Key 空间与诊断
 
-如果要增加自定义 topic 或 service 类型，需要修改 [`swarm_ros_bridge/include/msgs_macro.hpp`](./swarm_ros_bridge/include/msgs_macro.hpp)：
+- fanout topic：`netbridge/v1/topic/<source>/fanout/<ros-topic>`
+- 定向 topic：`netbridge/v1/topic/<source>/dst/<hostname>/<ros-topic>`
+- service：`netbridge/v1/service/<server>/<ros-service>`
+- liveliness：`netbridge/v1/alive/<hostname>`
 
-1. 引入对应的头文件
-2. 在 `MSGS_MACRO` 或 `SRVS_MACRO` 中追加类型
-3. 在 YAML 中使用完全一致的 `msg_type` 或 `srv_type`
+`/swarm_bridge/diagnostics` 现在包含 transport、QoS、session/link 状态、peer/router 数、估算重连次数、接收队列丢弃、service 超时、envelope 解码错误，以及每个 Zenoh 节点的 liveliness 状态。
 
-示例：
+`bridge_tui` 的 Overview 页面会显示在线节点数；Nodes 页面会把配置中的节点和 Zenoh 动态发现的节点合并展示：`ONLINE` 表示当前持有 liveliness token，`OFFLINE` 表示曾经在线但 token 已消失，`UNKNOWN` 表示本机 bridge 启动后尚未观察到该节点，或本机诊断已超过 2.5 s 未更新。页面右上角同时显示诊断流为 `LIVE`、`STALE` 或 `WAIT`，避免把缓存中的旧状态误认为在线。节点详情还会显示当前状态持续时间和上线次数。TUI 每 500 ms 刷新，bridge 每 1 s 发布一次诊断；Zenoh 已产生 liveliness 事件后，TUI 通常会在约 1–2 s 内更新，非正常断网的发现时间还取决于 Zenoh transport 的失联检测时间。
 
-```cpp
-#include <your_pkg/YourMsg.h>
+TUI 会在运行时根据终端尺寸自动重排：窄屏使用顶部导航和紧凑列表，中屏上下分区，宽屏使用侧栏与并排详情；直接调整终端大小即可切换，无需重启。最小验证尺寸为 `40x12`，日常使用建议至少 `80x24`。
 
-#define MSGS_MACRO \
-  X("sensor_msgs/Image", sensor_msgs::Image) \
-  X("your_pkg/YourMsg", your_pkg::YourMsg)
-```
+## 测试与部署
 
-## 3. 编译与运行
-
-### 3.1 编译
-
-在安装好依赖后，放到 catkin 工作空间中进行编译即可。
-
-### 3.2 单机模拟
-
-单机模拟时，需要先创建虚拟网卡：
+本地测试：
 
 ```bash
-sh swarm_ros_bridge/scripts/create_vitrul_interface.sh 4
+./devel/lib/swarm_ros_bridge/test_bridge_transport
+./devel/lib/swarm_ros_bridge/test_zenoh_transport_smoke
+./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-不再需要时删除：
+第二项会在 loopback 上建立两个真实 Zenoh peer，验证 pub/sub、query/reply，以及节点上线和离线事件。完整实机验收、TCP/QUIC 交替测试、回滚门槛与记录表见 [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md)。
+
+启动方式保持不变，例如：
 
 ```bash
-sh swarm_ros_bridge/scripts/delete_virtul_interface.sh 4
+roslaunch swarm_ros_bridge example_bridge_drone.launch
+roslaunch swarm_ros_bridge example_bridge_station.launch
+# 同时启动 bridge 和 TUI
+roslaunch swarm_ros_bridge bridge_with_tui_drone.launch
+roslaunch swarm_ros_bridge bridge_with_tui_station.launch
 ```
 
-随后加载模拟配置，例如：
+新增自定义消息或 service 时，继续修改 [`msgs_macro.hpp`](swarm_ros_bridge/include/msgs_macro.hpp)，并保证所有节点使用相同构建产物与配置版本。
 
-```xml
-<group ns="bridge">
-  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
-    <param name="hostname" type="string" value="drone1"/>
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
-  </node>
-</group>
-```
-
-### 3.3 实机部署
-
-实机运行时，先修改 `ip_real.yaml`，然后使用仓库内提供的 launch：
-
-- `launch/example_bridge_drone.launch`
-- `launch/example_bridge_station.launch`
-- `launch/bridge_with_tui_drone.launch`
-- `launch/bridge_with_tui_station.launch`
-
-无人机端示例：
-
-```xml
-<launch>
-  <group ns="bridge">
-    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
-      <param name="hostname" type="string" value="drone$(env DRONE_ID)"/>
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
-    </node>
-  </group>
-</launch>
-```
-
-地面站示例：
-
-```xml
-<launch>
-  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_station_node" output="screen">
-    <param name="hostname" type="string" value="groundStation0"/>
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
-  </node>
-</launch>
-```
-
-## 4. Contributors
+## Contributors
 
 - Weiqi Gai 2025.01
 - KengHou Hoi 2024.08
-
-## Special Thanks
-
-- BestAnHongjun 和 [PicSocket](https://github.com/BestAnHongjun/PicSocket) 项目，对图像传输部分的实现帮助很大。

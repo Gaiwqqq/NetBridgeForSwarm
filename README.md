@@ -1,291 +1,143 @@
-# NetBridgeForSwarm V1.1 BETA PREVIEW [中文](README-zh.md)
+# NetBridgeForSwarm (Zenoh 1.9) [中文](README-zh.md)
 
-## 0. New In V1.1
+NetBridgeForSwarm is a ROS1 Noetic bridge for multi-robot systems. This version uses one process-wide Zenoh session for topics, images, point clouds, and services while preserving ROS serialization, adaptive JPEG quality, Draco/PCL point-cloud compression, prefix rules, and directed `to_drone_ids` routing.
 
-- Support `sensor_msgs/PointCloud2` compression to reduce bandwidth usage.
-- Support `sensor_msgs/PointCloud2` downsampling before transmission.
-- Support Draco point cloud codec.
-- Support adaptive JPEG quality control for image streams.
-- Add terminal UI (`bridge_tui`) for bridge diagnostics.
+Key changes:
 
-## 1. Introduction
+- ZeroMQ, per-topic ports, and the custom UDP image-fragmentation runtime are removed.
+- Topics use Zenoh pub/sub; services use Zenoh query/reply.
+- The versioned `NBZ1` envelope carries source, sequence, source time, ROS type/MD5, ROS header metadata, payload kind, and payload.
+- Zenoh callbacks only enqueue work into bounded queues. Joinable bridge workers perform ROS deserialization and publication.
+- `state` and `bulk` queues keep only the newest sample; `command` and service traffic use blocking congestion control.
+- JPEG image transport now preserves `seq`, `stamp`, and `frame_id`.
 
-ROS1 multi-machine communication is still inconvenient in many real projects. Existing solutions are often tightly coupled to a specific system and are not flexible enough for mixed drone / station deployments.
+## Dependencies and build
 
-NetBridgeForSwarm is a ROS1 multi-machine communication middleware that forwards:
+The project requires ROS Noetic/catkin, OpenCV, PCL, JPEG, the bundled FTXUI and Draco sources, and exactly `zenoh-c`/`zenoh-cpp` 1.9.0.
 
-- ROS topics
-- ROS services
-- image streams (`sensor_msgs/Image`)
-- custom message and service types
-
-This project is inspired by Peixuan Shu's open-source project [swarm_ros_bridge](https://github.com/shupx/swarm_ros_bridge), and extends it with a more flexible configuration model, image transport improvements, point cloud transport, and newer diagnostics support.
-
-### 1.1 Main Features
-
-- One shared YAML configuration for all nodes in the swarm.
-- Custom topic and service type support through `include/msgs_macro.hpp`.
-- Image transport over UDP with resize and adaptive JPEG quality settings.
-- Topic and service forwarding over TCP.
-- Point cloud compression, downsampling, and Draco codec support.
-- Optional TUI monitor for host/topic/log visibility.
-
-### 1.2 Dependencies
+The official Zenoh 1.9.0 GNU binaries are not compatible with Ubuntu 20.04's GLIBC 2.31. Build native Debian packages on an Ubuntu 20.04 x86_64 builder and again on an Ubuntu 20.04 ARM64 builder:
 
 ```bash
-sudo apt-get install libzmqpp-dev ros-noetic-topic-tools
+sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
+# Install the Rust toolchain required by the Zenoh 1.9 source tree, then run:
+./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
+  --work-dir /tmp/zenoh-1.9-build \
+  --output-dir ./zenoh-debs
+sudo dpkg -i ./zenoh-debs/*.deb
 ```
 
-The package also depends on:
+The script pins tag `1.9.0`, enables the Zenoh reliability API, disables shared memory, and builds packages for the native architecture. Do not copy packages built on a newer Linux distribution to Ubuntu 20.04.
 
-- ROS Noetic / catkin
-- `cv_bridge_noetic_fit_version`
-- OpenCV
-- PCL
-- JPEG
-- bundled third-party libraries: `FTXUI` and `draco`
+Build the ROS workspace normally after installing the packages:
 
-If you use a custom OpenCV build, recompile `cv_bridge` against that version and replace `cv_bridge_noetic_fit_version` accordingly.
-
-Example:
-
-```cmake
-find_package(OpenCV 4.5.3 REQUIRED)
-catkin_package(CATKIN_DEPENDS cv_bridge_noetic_fit_version)
+```bash
+source /opt/ros/noetic/setup.bash
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
-## 2. Configuration
+## Configuration
 
-Main config files are under [`swarm_ros_bridge/config`](./swarm_ros_bridge/config):
-
-- `default.yaml`: real deployment example
-- `default_sim.yaml`: local simulation example
-- `ip_real.yaml`: real network host map
-- `ip_sim.yaml`: simulated network host map
-
-### 2.1 IP Configuration
-
-Each bridge node identifies itself through the ROS param `hostname`. That hostname must exist in the `IP` map.
+The host inventory no longer contains ports or mandatory IP addresses:
 
 ```yaml
-IP:
-  all: '*'
-  all_drone: 'all_drone'
-  groundStation0: 172.16.0.200
-  drone0: 172.16.0.100
-  drone1: 172.16.0.101
-  drone2: 172.16.0.102
-  drone3: 172.16.0.103
+hosts:
+  - groundStation0
+  - drone1
+  - drone2
 ```
 
-Notes:
+The legacy `IP` map can temporarily supply host names and optional TCP seed addresses. New deployments should use `hosts`. `all` and `all_drone` remain routing selectors, not host entries.
 
-- `all` and `all_drone` are reserved keywords and must not be removed.
-- Drone hostnames must use the `drone0`, `drone1`, ... format.
-- Names like `drone_1` are not parsed as drone ids.
-
-Global config example:
+Global Zenoh configuration:
 
 ```yaml
-config:
-  debug: false
-  odom_convert: true
-  monitor_node: true
-  warn_threshold: 3
-  monitor_rate_hz: 500
+zenoh:
+  mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
+  compression_enabled: false
+  listen_endpoints: []
+  connect_endpoints: []
+  seed_from_ip_table: false
+  seed_port: 7447
+  service_timeout_ms: 1000
+  service_worker_threads: 2
+  service_queue_capacity: 64
 ```
 
-### 2.2 Topic Configuration
+If the airborne network blocks multicast, put one or more static peers such as `tcp/192.168.123.6:7447` in `connect_endpoints`. See [`zenoh_quic_example.yaml`](swarm_ros_bridge/config/zenoh_quic_example.yaml) for the controlled-network TCP/QUIC comparison. QUIC mixed reliability maps `Reliable` traffic to streams and `BestEffort` traffic to datagrams when built by the supplied script. See the [Zenoh QUIC documentation](https://zenoh.io/docs/manual/quic/) for endpoint details.
 
-Example:
+Every topic must define `qos_class`:
 
 ```yaml
 topics:
   - topic_name: /ekf_quat/ekf_odom
     msg_type: nav_msgs/Odometry
-    srcIP:
-      - drone1
-    srcPort: 3004
+    qos_class: state
+    srcIP: [drone1]
+    dstIP: [groundStation0]
     max_freq: 30
-    dstIP:
-      - groundStation0
     prefix: false
     same_prefix: false
 ```
 
-Important fields:
+| Class | Zenoh policy | Intended use |
+|---|---|---|
+| `command` | Reliable / RealTime / Block / Express | One-shot control, goals, and mode changes |
+| `state` | BestEffort / DataHigh / Drop / Express | Continuous state such as Odometry; receiver keeps latest |
+| `bulk` | BestEffort / DataLow / Drop | Image, PointCloud2, and MarkerArray; receiver keeps latest |
+| service | Reliable / InteractiveHigh / Block / Express | Bridge-managed class; 1000 ms default timeout |
 
-- `topic_name`: ROS topic to forward
-- `msg_type`: ROS message type in `package/Msg` format
-- `srcIP`: sender hostnames from the `IP` map
-- `dstIP`: receiver hostnames from the `IP` map
-- `srcPort`: unique port for this forwarding rule
-- `max_freq`: max transmit rate in Hz, `-1` means unlimited
-- `prefix`: add source hostname as namespace on receiver side
-- `same_prefix`: when enabled, merge under `/bridge/...`
+`srcPort` is no longer supported. The field names `srcIP` and `dstIP` remain for configuration compatibility, but their values are host names rather than IP addresses.
 
-Special topic options:
+Image options (`imgResizeRate`, JPEG quality, adaptive quality bounds, target bandwidth, and cooldown) remain supported. Point clouds retain downsampling and Draco/PCL codecs. Generic Zenoh compression is disabled by default to avoid recompressing JPEG and Draco payloads.
 
-```yaml
-  - topic_name: /camera/color/image_raw
-    msg_type: sensor_msgs/Image
-    imgResizeRate: 0.5
-    imgJpegQuality: 85
-    imgAdaptiveQuality: true
-    imgMinJpegQuality: 40
-    imgMaxJpegQuality: 90
-    imgTargetBandwidthKbps: 800
-    imgQualityStep: 5
-    imgAdaptCooldownFrames: 6
-```
-
-- `imgResizeRate`: resize ratio before encoding
-- `imgJpegQuality`: initial JPEG quality
-- `imgAdaptiveQuality`: enable adaptive quality control
-- `imgMinJpegQuality` / `imgMaxJpegQuality`: adaptive quality bounds
-- `imgTargetBandwidthKbps`: target bandwidth for adaptive control
-- `imgQualityStep`: quality step per adjustment
-- `imgAdaptCooldownFrames`: cooldown before the next adaptation
-
-Point cloud options:
-
-```yaml
-  - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
-    msg_type: sensor_msgs/PointCloud2
-    cloudCompress: true
-    cloudDownsample: -1.0
-    cloudCodec: draco
-```
-
-- `cloudCompress`: enable point cloud compression
-- `cloudDownsample`: `-1.0` disables downsampling
-- `cloudCodec`: current example uses `draco`
-
-Wildcard source example:
-
-```yaml
-  - topic_name: /drone_{id}_ego_planner_node/optimal_list
-    msg_type: visualization_msgs/Marker
-    srcIP:
-      - all_drone
-    srcPort: 3002
-    max_freq: 30
-    dstIP:
-      - groundStation0
-    prefix: false
-    same_prefix: false
-```
-
-When `{id}` is used in the topic name, the bridge replaces it with the parsed drone id. For example, `groundStation0` can receive `/drone_0_ego_planner_node/optimal_list`, `/drone_1_ego_planner_node/optimal_list`, and so on.
-
-### 2.3 Service Configuration
-
-Services support one server and multiple clients.
+Services no longer have a port:
 
 ```yaml
 services:
   - srv_name: /add_two_ints
     srv_type: swarm_ros_bridge/AddTwoInts
     serverIp: drone1
-    clientIp:
-      - groundStation0
-      - drone2
-    srcPort: 2000
+    clientIp: [groundStation0, drone2]
     prefix: true
 ```
 
-If `prefix` is `true`, clients call the service with the server hostname namespace. For the example above, the client calls `/drone1/add_two_ints`.
+Clients call `/drone1/add_two_ints`. The server rejects requests whose envelope source is unauthorized or whose service type/MD5 is incompatible.
 
-### 2.4 Custom Message Types
+## Key space and diagnostics
 
-To add a custom topic or service type, edit [`swarm_ros_bridge/include/msgs_macro.hpp`](./swarm_ros_bridge/include/msgs_macro.hpp):
+- Fanout topic: `netbridge/v1/topic/<source>/fanout/<ros-topic>`
+- Directed topic: `netbridge/v1/topic/<source>/dst/<hostname>/<ros-topic>`
+- Service: `netbridge/v1/service/<server>/<ros-service>`
+- Liveliness: `netbridge/v1/alive/<hostname>`
 
-1. add the required message / service header
-2. append the type to `MSGS_MACRO` or `SRVS_MACRO`
-3. use the exact same `msg_type` or `srv_type` string in YAML
+`/swarm_bridge/diagnostics` now reports transport and QoS class, session/link state, peer/router counts, estimated reconnections, bounded-queue drops, service timeouts, and envelope decode failures. `bridge_tui` continues to show topic rate, bandwidth, latency, jitter, and JPEG state.
 
-Example:
+The TUI reflows at runtime: narrow terminals use top navigation and compact lists, medium terminals stack list/detail panels, and wide terminals use a sidebar with side-by-side inspectors. Resize the terminal without restarting. The validated minimum is `40x12`; `80x24` or larger is recommended for routine use.
 
-```cpp
-#include <your_pkg/YourMsg.h>
+## Tests and deployment
 
-#define MSGS_MACRO \
-  X("sensor_msgs/Image", sensor_msgs::Image) \
-  X("your_pkg/YourMsg", your_pkg::YourMsg)
-```
-
-## 3. Build And Run
-
-### 3.1 Build
-
-Build it in a catkin workspace after dependencies are installed.
-
-### 3.2 Local Simulation
-
-For single-PC simulation, create virtual interfaces first:
+Run the local tests after building:
 
 ```bash
-sh swarm_ros_bridge/scripts/create_vitrul_interface.sh 4
+./devel/lib/swarm_ros_bridge/test_bridge_transport
+./devel/lib/swarm_ros_bridge/test_zenoh_transport_smoke
+./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-Delete them when no longer needed:
+The smoke test starts two real loopback Zenoh peers and verifies both pub/sub and query/reply. See [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md) for the physical-link baseline, alternating TCP/QUIC trials, acceptance criteria, and rollback gate.
+
+Launch commands remain unchanged:
 
 ```bash
-sh swarm_ros_bridge/scripts/delete_virtul_interface.sh 4
+roslaunch swarm_ros_bridge example_bridge_drone.launch
+roslaunch swarm_ros_bridge example_bridge_station.launch
 ```
 
-Then launch with the simulation config files, for example:
+To add a custom ROS topic or service type, update [`msgs_macro.hpp`](swarm_ros_bridge/include/msgs_macro.hpp). All nodes must use the same build artifact and configuration version.
 
-```xml
-<group ns="bridge">
-  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
-    <param name="hostname" type="string" value="drone1"/>
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default_sim.yaml" />
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_sim.yaml" />
-  </node>
-</group>
-```
-
-### 3.3 Real Deployment
-
-For real machines, update `ip_real.yaml` and use the provided launch files:
-
-- `launch/example_bridge_drone.launch`
-- `launch/example_bridge_station.launch`
-- `launch/bridge_with_tui_drone.launch`
-- `launch/bridge_with_tui_station.launch`
-
-Example drone launch:
-
-```xml
-<launch>
-  <group ns="bridge">
-    <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_node" output="screen">
-      <param name="hostname" type="string" value="drone$(env DRONE_ID)"/>
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
-      <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
-    </node>
-  </group>
-</launch>
-```
-
-Example station launch:
-
-```xml
-<launch>
-  <node pkg="swarm_ros_bridge" type="bridge_new" name="swarm_bridge_station_node" output="screen">
-    <param name="hostname" type="string" value="groundStation0"/>
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/default.yaml" />
-    <rosparam command="load" file="$(find swarm_ros_bridge)/config/ip_real.yaml" />
-  </node>
-</launch>
-```
-
-## 4. Contributors
+## Contributors
 
 - Weiqi Gai 2025.01
 - KengHou Hoi 2024.08
-
-## Special Thanks
-
-- BestAnHongjun and the [PicSocket](https://github.com/BestAnHongjun/PicSocket) project for helping the image transport implementation.

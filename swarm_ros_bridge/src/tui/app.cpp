@@ -2,14 +2,18 @@
 #include "tui/hosts_screen.hpp"
 #include "tui/logs_screen.hpp"
 #include "tui/overview_screen.hpp"
+#include "tui/screen_common.hpp"
 #include "tui/topics_screen.hpp"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/terminal.hpp>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <set>
 #include <thread>
 #include <string>
 #include <utility>
@@ -71,10 +75,25 @@ void App::BuildTopicEntries() {
 }
 
 void App::BuildHostEntries() {
-  host_entries_.clear();
-  host_entries_.reserve(config_.ip_map.size());
+  std::set<std::string> hosts;
   for (const auto& entry : config_.ip_map) {
-    host_entries_.push_back(entry.first);
+    if (entry.first != "all" && entry.first != "all_drone") {
+      hosts.insert(entry.first);
+    }
+  }
+  if (diagnostics_cache_ != nullptr) {
+    for (const auto& node : diagnostics_cache_->NodeSnapshot()) {
+      if (!node.node_hostname.empty()) {
+        hosts.insert(node.node_hostname);
+      }
+    }
+  }
+  host_entries_.assign(hosts.begin(), hosts.end());
+  if (host_entries_.empty()) {
+    state_.selected_host = 0;
+  } else {
+    state_.selected_host =
+        std::min<int>(state_.selected_host, host_entries_.size() - 1);
   }
 }
 
@@ -95,6 +114,8 @@ int App::Run() {
     }
     return label | color(Color::GrayLight);
   };
+  MenuOption compact_nav_option = nav_option;
+  compact_nav_option.direction = Direction::Right;
 
   MenuOption topic_option;
   topic_option.direction = Direction::Down;
@@ -108,7 +129,10 @@ int App::Run() {
                                           &live_info);
         const auto pressure_color =
             has_live_info ? PressureColor(live_info.bandwidth_kbps) : Color::GrayLight;
-        auto label = text("  " + MiddleEllipsis(entry_state.label, 42) + "  ");
+        const int terminal_width = Terminal::Size().dimx;
+        const std::size_t label_width =
+            terminal_width < 72 ? 28U : (terminal_width < 110 ? 38U : 42U);
+        auto label = text("  " + MiddleEllipsis(entry_state.label, label_width) + "  ");
         if (entry_state.focused || entry_state.active) {
           return label | bold | color(Color::Black) | bgcolor(pressure_color);
         }
@@ -119,14 +143,32 @@ int App::Run() {
   host_option.direction = Direction::Down;
   host_option.entries_option.transform =
       [this](const EntryState& entry_state) {
-        auto label = text("  " + MiddleEllipsis(entry_state.label, 28) + "  ");
+        swarm_ros_bridge::NetworkInfo presence;
+        const bool known = diagnostics_cache_ != nullptr &&
+                           diagnostics_cache_->LookupNode(entry_state.label,
+                                                          &presence);
+        const std::string state_label =
+            !known ? "[ ? ] " : (presence.node_online ? "[UP ] " : "[DOWN] ");
+        const auto state_color =
+            !known ? Color::GrayLight
+                   : (presence.node_online ? Color::GreenLight : Color::RedLight);
+        const int terminal_width = Terminal::Size().dimx;
+        const std::size_t label_width = terminal_width < 72 ? 14U : 22U;
+        auto label = text(" " + state_label +
+                          MiddleEllipsis(entry_state.label, label_width) + " ");
         if (entry_state.focused || entry_state.active) {
-          return label | bold | color(Color::Black) | bgcolor(Color::CyanLight);
+          return label | bold | color(Color::Black) | bgcolor(state_color);
         }
-        return label | color(Color::White);
+        return label | color(state_color);
       };
 
-  Component nav = Menu(&state_.nav_items, &state_.selected_nav, nav_option);
+  Component nav_vertical =
+      Menu(&state_.nav_items, &state_.selected_nav, nav_option);
+  Component nav_horizontal =
+      Menu(&state_.nav_items, &state_.selected_nav, compact_nav_option);
+  int nav_mode_index = 0;
+  Component nav =
+      Container::Tab({nav_vertical, nav_horizontal}, &nav_mode_index);
   Component topics = Menu(&topic_entries_, &state_.selected_topic, topic_option);
   Component hosts = Menu(&host_entries_, &state_.selected_host, host_option);
   Component layout = Container::Horizontal({nav, topics, hosts});
@@ -138,70 +180,126 @@ int App::Run() {
       screen.PostEvent(ftxui::Event::Custom);
     }
   });
-  auto renderer = Renderer(layout, [this, nav, topics, hosts] {
+  auto renderer = Renderer(layout, [this, nav, topics, hosts, &nav_mode_index] {
     using namespace ftxui;
+    BuildHostEntries();
+    const auto dimensions = Terminal::Size();
+    const LayoutContext layout_context =
+        MakeLayoutContext(dimensions.dimx, dimensions.dimy);
+    nav_mode_index = layout_context.top_navigation ? 1 : 0;
 
     Element content;
     switch (state_.selected_nav) {
       case 0:
-        content = RenderOverviewScreen(config_, diagnostics_cache_);
+        content = RenderOverviewScreen(config_, diagnostics_cache_,
+                                       layout_context);
         break;
       case 1:
-        content = RenderTopicsScreen(config_, state_, diagnostics_cache_, topics);
+        content = RenderTopicsScreen(config_, state_, diagnostics_cache_, topics,
+                                     layout_context);
         break;
       case 2:
-        content = RenderHostsScreen(config_, state_, hosts);
+        content = RenderHostsScreen(config_, state_, diagnostics_cache_,
+                                    host_entries_, hosts, layout_context);
         break;
       case 3:
       default:
-        content = RenderLogsScreen(config_, state_);
+        content = RenderLogsScreen(config_, state_, layout_context);
         break;
     }
 
-    auto header = hbox({
-                      vbox({
-                          text("Gwq NetBridge Control Deck") | bold | color(Color::White),
-                          text("TUI configuration + runtime observability") |
-                              color(Color::GrayLight),
-                      }),
-                      filler(),
-                      vbox({
-                          text("Host  " + config_.hostname) | align_right |
-                              color(Color::CyanLight),
-                          text("Topics " + std::to_string(config_.topics.size()) +
-                               "   Services " + std::to_string(config_.services.size())) |
-                              align_right | color(Color::GrayLight),
-                      }),
-                  }) |
-                  bgcolor(Color::RGB(20, 27, 45)) | borderRounded;
+    Element header;
+    if (layout_context.top_navigation) {
+      const int host_width = std::max(8, layout_context.terminal_width - 30);
+      header = hbox({
+                   text(" NetBridge ") | bold | color(Color::White),
+                   text("ZENOH") | color(Color::CyanLight),
+                   filler(),
+                   text(MiddleEllipsis(config_.hostname,
+                                       static_cast<std::size_t>(host_width))) |
+                       color(Color::CyanLight),
+                   text(" "),
+               }) |
+               bgcolor(Color::RGB(20, 27, 45)) | borderRounded;
+    } else {
+      header = hbox({
+                    vbox({
+                        text("Gwq NetBridge Control Deck") | bold |
+                            color(Color::White),
+                        text("TUI configuration + runtime observability") |
+                            color(Color::GrayLight),
+                    }),
+                    filler(),
+                    vbox({
+                        text("Host  " + config_.hostname) | align_right |
+                            color(Color::CyanLight),
+                        text("Topics " + std::to_string(config_.topics.size()) +
+                             "   Services " +
+                             std::to_string(config_.services.size())) |
+                            align_right | color(Color::GrayLight),
+                    }),
+                }) |
+                bgcolor(Color::RGB(20, 27, 45)) | borderRounded;
+    }
 
     auto sidebar = vbox({
                        text("Navigation") | bold | color(Color::CyanLight),
                        separator(),
                        nav->Render() | frame | vscroll_indicator | flex,
                    }) |
-                   size(WIDTH, EQUAL, 24) | bgcolor(Color::RGB(17, 22, 35)) |
-                   borderRounded;
+                   bgcolor(Color::RGB(17, 22, 35)) |
+                   borderRounded |
+                   size(WIDTH, EQUAL, layout_context.sidebar_width);
 
-    auto footer = hbox({
-                      text(" q Quit ") | bgcolor(Color::DarkSlateGray1) | color(Color::Black),
-                      text(" arrows Move ") | color(Color::GrayLight),
-                      text("   "),
-                      text(" tab Focus ") | color(Color::GrayLight),
-                      text("   "),
-                      text(" wheel Scroll list ") | color(Color::GrayLight),
-                      text("   "),
-                      text(" mouse Select item ") | color(Color::GrayLight),
+    Element footer;
+    if (layout_context.top_navigation) {
+      footer = hbox({
+                   text(" q quit ") | bgcolor(Color::DarkSlateGray1) |
+                       color(Color::Black),
+                   text("  arrows move  tab focus ") | color(Color::GrayLight),
+                   filler(),
+                   text(std::to_string(layout_context.terminal_width) + "x" +
+                        std::to_string(layout_context.terminal_height) + " ") |
+                       color(Color::GrayDark),
+               }) |
+               bgcolor(Color::RGB(20, 27, 45));
+    } else {
+      footer = hbox({
+                    text(" q Quit ") | bgcolor(Color::DarkSlateGray1) |
+                        color(Color::Black),
+                    text(" arrows Move ") | color(Color::GrayLight),
+                    text("   tab Focus   wheel Scroll   mouse Select ") |
+                        color(Color::GrayLight),
+                    filler(),
+                    text(std::to_string(layout_context.terminal_width) + "x" +
+                         std::to_string(layout_context.terminal_height) + " ") |
+                        color(Color::GrayDark),
+                }) |
+                bgcolor(Color::RGB(20, 27, 45)) | borderRounded;
+    }
+
+    Element workspace;
+    auto bounded_content =
+        content |
+        size(WIDTH, EQUAL, layout_context.content_width) |
+        size(HEIGHT, EQUAL, layout_context.content_height);
+    if (layout_context.top_navigation) {
+      workspace = vbox({
+                      nav->Render() | borderRounded,
+                      bounded_content | frame | flex,
                   }) |
-                  bgcolor(Color::RGB(20, 27, 45)) | borderRounded;
+                  flex;
+    } else {
+      workspace = hbox({
+                      sidebar,
+                      bounded_content | frame | flex,
+                  }) |
+                  flex;
+    }
 
     return vbox({
                header,
-               hbox({
-                   sidebar,
-                   content | flex,
-               }) |
-                   flex,
+               workspace,
                footer,
            }) |
            bgcolor(Color::RGB(8, 12, 20));

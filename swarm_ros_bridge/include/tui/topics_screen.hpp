@@ -3,6 +3,7 @@
 
 #include "config/bridge_config.hpp"
 #include "diagnostics/diagnostics_cache.hpp"
+#include "tui/screen_common.hpp"
 #include "tui/view_state.hpp"
 
 #include <ftxui/component/component.hpp>
@@ -15,7 +16,8 @@ namespace tui {
 ftxui::Element RenderTopicsScreen(const config::BridgeConfig& config,
                                   const ViewState& state,
                                   const std::shared_ptr<diagnostics::DiagnosticsCache>& diagnostics_cache,
-                                  ftxui::Component topic_list);
+                                  ftxui::Component topic_list,
+                                  const LayoutContext& layout);
 
 }  // namespace tui
 }  // namespace swarm_ros_bridge

@@ -1,2 +1,1 @@
-# Generated Zenoh Debian packages are architecture-specific build artifacts.
-zenoh-debs/
+# Prebuilt Zenoh Debian packages under zenoh-debs/ are intentionally versioned.

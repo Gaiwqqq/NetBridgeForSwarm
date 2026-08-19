@@ -15,7 +15,13 @@ NetBridgeForSwarm 是面向 ROS1 Noetic 多机系统的通信 bridge。当前版
 
 基础依赖包括 ROS Noetic/catkin、OpenCV、PCL、JPEG、仓库内置 FTXUI 与 Draco，以及固定版本的 `zenoh-c`/`zenoh-cpp` 1.9.0。
 
-官方 GNU Zenoh 1.9.0 二进制不能直接运行于 Ubuntu 20.04（GLIBC 2.31）。请分别在 x86_64 和 ARM64 的 Ubuntu 20.04 构建机上生成原生 Debian 包：
+官方 GNU Zenoh 1.9.0 二进制不能直接运行于 Ubuntu 20.04（GLIBC 2.31）。仓库已提供在 Ubuntu 20.04 原生构建的 amd64 与 arm64 Debian 包，可按当前机器架构直接安装：
+
+```bash
+sudo dpkg -i ./zenoh-debs/"$(dpkg --print-architecture)"/*.deb
+```
+
+如需重新生成包，先安装构建依赖：
 
 ```bash
 sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
@@ -37,8 +43,8 @@ cargo --version
 ```bash
 ./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
   --work-dir /tmp/zenoh-1.9-build \
-  --output-dir ./zenoh-debs
-sudo dpkg -i ./zenoh-debs/*.deb
+  --output-dir ./zenoh-debs/"$(dpkg --print-architecture)"
+sudo dpkg -i ./zenoh-debs/"$(dpkg --print-architecture)"/*.deb
 ```
 
 脚本固定 tag `1.9.0`，启用 Zenoh reliability API，关闭 shared-memory，并输出 `libzenohc`、开发头文件及 `zenoh-cpp` 包。不要把其他发行版构建出的包复制到 Ubuntu 20.04。

@@ -95,7 +95,7 @@ topics:
 - topic_name: /camera/color/image_raw
   msg_type: sensor_msgs/Image
   qos_class: bulk
-  imgResizeRate: 0.5
+  imgResizeRate: 1.0
   imgJpegQuality: 85
   imgAdaptiveQuality: true
   imgMinJpegQuality: 40
@@ -110,7 +110,6 @@ topics:
     - groundStation0
   prefix: false
   same_prefix: false
-
 
 
 

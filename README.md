@@ -15,7 +15,13 @@ Key changes:
 
 The project requires ROS Noetic/catkin, OpenCV, PCL, JPEG, the bundled FTXUI and Draco sources, and exactly `zenoh-c`/`zenoh-cpp` 1.9.0.
 
-The official Zenoh 1.9.0 GNU binaries are not compatible with Ubuntu 20.04's GLIBC 2.31. Build native Debian packages on an Ubuntu 20.04 x86_64 builder and again on an Ubuntu 20.04 ARM64 builder:
+The official Zenoh 1.9.0 GNU binaries are not compatible with Ubuntu 20.04's GLIBC 2.31. This repository includes native Ubuntu 20.04 packages for amd64 and arm64; install the set matching the current machine:
+
+```bash
+sudo dpkg -i ./zenoh-debs/"$(dpkg --print-architecture)"/*.deb
+```
+
+To rebuild the packages, install the build dependencies first:
 
 ```bash
 sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
@@ -37,8 +43,8 @@ Then build the Zenoh Debian packages:
 ```bash
 ./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
   --work-dir /tmp/zenoh-1.9-build \
-  --output-dir ./zenoh-debs
-sudo dpkg -i ./zenoh-debs/*.deb
+  --output-dir ./zenoh-debs/"$(dpkg --print-architecture)"
+sudo dpkg -i ./zenoh-debs/"$(dpkg --print-architecture)"/*.deb
 ```
 
 The script pins tag `1.9.0`, enables the Zenoh reliability API, disables shared memory, and builds packages for the native architecture. Do not copy packages built on a newer Linux distribution to Ubuntu 20.04.

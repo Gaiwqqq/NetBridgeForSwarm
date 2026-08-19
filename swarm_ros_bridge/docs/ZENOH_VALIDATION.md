@@ -119,6 +119,6 @@ zenoh:
 - 断连恢复、关键流成功率或 bulk 新鲜度至少一项明显优于 Legacy；
 - bridge CPU 与 RSS 相对 Legacy 的增幅均不超过 15%。
 
-测试集群通过后一次性切换 4–10 架整组设备。连续完成 5 次完整任务且无严重问题前，保留 Legacy 二进制、配置和本仓库中已由 `CATKIN_IGNORE` 隔离的旧 `pic_sockets` 源码。达到门槛后再删除这些回滚资产和最终残留依赖。
+测试集群通过后一次性切换 4–10 架整组设备。旧 `pic_sockets` 源码已从当前仓库版本移除；需要回滚时应使用迁移前的 Git 提交、Legacy 二进制和配置，不要在当前 Zenoh bridge 中恢复或混用旧 UDP 图像链路。
 
 若任一硬性条件失败，立即整组恢复 Legacy 包，保留失败轮次数据，并按失败指标决定调整 QoS、发送频率、JPEG/Draco 参数或 Zenoh endpoint；不要在同一任务中混用两种 bridge。

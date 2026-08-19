@@ -19,7 +19,22 @@ NetBridgeForSwarm 是面向 ROS1 Noetic 多机系统的通信 bridge。当前版
 
 ```bash
 sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
-# 安装 Rust 1.93 工具链后：
+```
+
+使用官方 [`rustup`](https://rust-lang.org/tools/install.html) 安装并固定 Rust 1.93 工具链。安装完成后必须加载 Cargo 环境；新开的 shell 会自动加载：
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+  sh -s -- -y --profile minimal --default-toolchain 1.93.0
+source "$HOME/.cargo/env"
+rustup default 1.93.0
+rustc --version
+cargo --version
+```
+
+随后构建 Zenoh Debian 包：
+
+```bash
 ./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
   --work-dir /tmp/zenoh-1.9-build \
   --output-dir ./zenoh-debs
@@ -91,6 +106,8 @@ topics:
 不再支持 `srcPort`。`srcIP`/`dstIP` 字段名为兼容现有配置宏暂时保留，但其中的值是 host 名，不是 IP。
 
 图像仍支持 `imgResizeRate`、`imgJpegQuality`、`imgAdaptiveQuality`、质量上下限、目标带宽和调节步长。点云仍支持 `cloudCompress`、`cloudDownsample` 以及 `draco`/`pcl_octree` codec。Zenoh 通用压缩默认关闭，避免重复压缩 JPEG/Draco。
+
+Draco 会自动识别标准 `float32 x/y/z` 和带打包 `rgb`/`rgba`（`FLOAT32` 或 `UINT32`）或独立 `uint8 r/g/b[/a]` 的 XYZRGB 点云。传输会保留完整 header、字段描述、宽高、字节序、`point_step`、`row_step`、`is_dense`、行填充和 intensity/ring 等附加字段；XYZ 坐标仍采用有损 14-bit 量化。显式启用 `cloudDownsample` 时，宽高对应降采样后的点云结构。
 
 service 配置不再需要端口：
 

@@ -12,10 +12,21 @@ namespace transport {
 
 struct EncodedPointCloud {
   std::string codec;
+  std::uint8_t format_version{0};
+  std::string point_type;
+  std_msgs::Header original_header;
+  std::uint32_t original_width{0};
+  std::uint32_t original_height{0};
+  std::vector<sensor_msgs::PointField> original_fields;
+  bool original_is_bigendian{false};
+  std::uint32_t original_point_step{0};
+  std::uint32_t original_row_step{0};
+  bool original_is_dense{false};
   ros::Time source_stamp;
   ros::Time receive_stamp;
   std::string frame_id;
   std::vector<std::uint8_t> payload;
+  std::vector<std::uint8_t> sidecar_bytes;
 };
 
 class PointCloudCodec {

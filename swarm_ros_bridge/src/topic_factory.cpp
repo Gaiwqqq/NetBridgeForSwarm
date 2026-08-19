@@ -40,6 +40,18 @@ std::vector<std::uint8_t> SerializeRosMessage(const T& message) {
   return output;
 }
 
+template <typename T>
+ros::Publisher AdvertisePreservingHeader(
+    const std::string& topic_name,
+    const std::shared_ptr<ros::NodeHandle>& node) {
+  ros::AdvertiseOptions options;
+  options.init<T>(topic_name, PUB_QUEUE_SIZE);
+  // roscpp normally overwrites Header.seq in the serialized output. The bridge
+  // must publish the sequence received from the source host unchanged.
+  options.has_header = false;
+  return node->advertise(options);
+}
+
 std::int64_t RosTimeToNs(const ros::Time& stamp) {
   return stamp.isZero() ? 0 : static_cast<std::int64_t>(stamp.toNSec());
 }
@@ -223,18 +235,17 @@ void TopicFactory::ptCloudProcess(const T& msg, std::vector<std::uint8_t>* data)
     throw std::invalid_argument("point cloud output is null");
   }
   sensor_msgs::PointCloud2 cloud_msg = msg;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>());
-  pcl::fromROSMsg(cloud_msg, *cloud_in);
   if (topic_cfg_.cloud_downsample_ > 0) {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled(
-        new pcl::PointCloud<pcl::PointXYZ>());
-    pcl::VoxelGrid<pcl::PointXYZ> filter;
+    pcl::PCLPointCloud2::Ptr cloud_in(new pcl::PCLPointCloud2());
+    pcl::PCLPointCloud2 cloud_downsampled;
+    pcl_conversions::toPCL(cloud_msg, *cloud_in);
+    pcl::VoxelGrid<pcl::PCLPointCloud2> filter;
     filter.setInputCloud(cloud_in);
     const float leaf = static_cast<float>(topic_cfg_.cloud_downsample_);
     filter.setLeafSize(leaf, leaf, leaf);
-    filter.filter(*cloud_downsampled);
-    cloud_in = cloud_downsampled;
-    pcl::toROSMsg(*cloud_in, cloud_msg);
+    filter.setDownsampleAllData(true);
+    filter.filter(cloud_downsampled);
+    pcl_conversions::fromPCL(cloud_downsampled, cloud_msg);
     cloud_msg.header = msg.header;
   }
 
@@ -259,7 +270,18 @@ void TopicFactory::ptCloudProcess(const T& msg, std::vector<std::uint8_t>* data)
       throw std::runtime_error("Draco encode failed");
     }
     compressed.compressed_bytes = std::move(encoded.payload);
+    compressed.format_version = encoded.format_version;
+    compressed.point_type = encoded.point_type;
+    compressed.original_fields = std::move(encoded.original_fields);
+    compressed.original_is_bigendian = encoded.original_is_bigendian;
+    compressed.original_point_step = encoded.original_point_step;
+    compressed.original_row_step = encoded.original_row_step;
+    compressed.original_is_dense = encoded.original_is_dense;
+    compressed.sidecar_bytes = std::move(encoded.sidecar_bytes);
   } else {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(
+        new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::fromROSMsg(cloud_msg, *cloud_in);
     std::stringstream stream;
     pcl::io::OctreePointCloudCompression<pcl::PointXYZ> codec(
         pcl::io::LOW_RES_ONLINE_COMPRESSION_WITHOUT_COLOR, false, 1e-3, 1e-3,
@@ -303,7 +325,7 @@ ros::Publisher TopicFactory::topicPublisher(
     const std::shared_ptr<ros::NodeHandle>& nh) {
 #define X(type, classname)                     \
   if (msg_type == type) {                     \
-    return nh->advertise<classname>(topic_name, PUB_QUEUE_SIZE); \
+    return AdvertisePreservingHeader<classname>(topic_name, nh); \
   }
   MSGS_MACRO
 #undef X
@@ -360,13 +382,25 @@ void TopicFactory::deserializePub(
         if (compressed.codec == "draco") {
           swarm_ros_bridge::transport::EncodedPointCloud encoded_cloud;
           encoded_cloud.codec = compressed.codec;
+          encoded_cloud.format_version = compressed.format_version;
+          encoded_cloud.point_type = compressed.point_type;
+          encoded_cloud.original_header = compressed.original_header;
+          encoded_cloud.original_width = compressed.original_width;
+          encoded_cloud.original_height = compressed.original_height;
+          encoded_cloud.original_fields = std::move(compressed.original_fields);
+          encoded_cloud.original_is_bigendian = compressed.original_is_bigendian;
+          encoded_cloud.original_point_step = compressed.original_point_step;
+          encoded_cloud.original_row_step = compressed.original_row_step;
+          encoded_cloud.original_is_dense = compressed.original_is_dense;
           encoded_cloud.source_stamp = compressed.sender_stamp;
           encoded_cloud.receive_stamp = ros::Time::now();
           encoded_cloud.frame_id = compressed.original_frame_id;
           encoded_cloud.payload = std::move(compressed.compressed_bytes);
+          encoded_cloud.sidecar_bytes = std::move(compressed.sidecar_bytes);
           if (!draco_codec_.Decode(encoded_cloud, &msg)) {
             throw std::runtime_error("Draco decode failed");
           }
+          msg.header = compressed.original_header;
         } else {
           pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
           std::stringstream compressed_stream;

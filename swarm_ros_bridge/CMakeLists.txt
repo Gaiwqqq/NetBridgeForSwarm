@@ -41,6 +41,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   sensor_msgs
   nav_msgs
+  visualization_msgs
 )
 
 find_package(Eigen3 REQUIRED)
@@ -68,11 +69,17 @@ add_service_files(
 generate_messages(
    DEPENDENCIES
    std_msgs
+   sensor_msgs
 )
 
 catkin_package(
    INCLUDE_DIRS include
    CATKIN_DEPENDS message_runtime cv_bridge_noetic_fit_version
+)
+
+catkin_install_python(PROGRAMS
+  scripts/bridge_test_publisher.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 include_directories(
@@ -179,6 +186,22 @@ add_executable(test_bridge_transport
 )
 target_include_directories(test_bridge_transport PRIVATE include)
 add_test(NAME bridge_transport_wire COMMAND test_bridge_transport)
+
+add_executable(test_draco_pointcloud_codec
+    test/draco_pointcloud_codec_test.cpp
+    src/transport/pointcloud_codec.cpp
+    src/transport/draco_pointcloud_codec.cpp
+)
+add_dependencies(test_draco_pointcloud_codec
+    ${${PROJECT_NAME}_EXPORTED_TARGETS}
+    ${catkin_EXPORTED_TARGETS}
+)
+target_include_directories(test_draco_pointcloud_codec PRIVATE include)
+target_link_libraries(test_draco_pointcloud_codec
+    ${catkin_LIBRARIES}
+    draco::draco
+)
+add_test(NAME draco_pointcloud_codec COMMAND test_draco_pointcloud_codec)
 
 add_executable(test_zenoh_transport_smoke
     test/zenoh_transport_smoke_test.cpp

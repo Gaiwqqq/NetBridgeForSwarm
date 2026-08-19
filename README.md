@@ -19,7 +19,22 @@ The official Zenoh 1.9.0 GNU binaries are not compatible with Ubuntu 20.04's GLI
 
 ```bash
 sudo apt-get install build-essential cmake git curl dpkg-dev ros-noetic-topic-tools
-# Install the Rust toolchain required by the Zenoh 1.9 source tree, then run:
+```
+
+Install and pin Rust 1.93 with the official [`rustup`](https://rust-lang.org/tools/install.html). Load Cargo's environment in the current shell after installation; new shells load it automatically:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+  sh -s -- -y --profile minimal --default-toolchain 1.93.0
+source "$HOME/.cargo/env"
+rustup default 1.93.0
+rustc --version
+cargo --version
+```
+
+Then build the Zenoh Debian packages:
+
+```bash
 ./swarm_ros_bridge/scripts/build_zenoh_1_9_debs.sh \
   --work-dir /tmp/zenoh-1.9-build \
   --output-dir ./zenoh-debs
@@ -91,6 +106,8 @@ topics:
 `srcPort` is no longer supported. The field names `srcIP` and `dstIP` remain for configuration compatibility, but their values are host names rather than IP addresses.
 
 Image options (`imgResizeRate`, JPEG quality, adaptive quality bounds, target bandwidth, and cooldown) remain supported. Point clouds retain downsampling and Draco/PCL codecs. Generic Zenoh compression is disabled by default to avoid recompressing JPEG and Draco payloads.
+
+Draco automatically recognizes standard `float32 x/y/z` clouds and XYZRGB clouds with packed `rgb`/`rgba` (`FLOAT32` or `UINT32`) or separate `uint8 r/g/b[/a]` fields. The bridge preserves the complete header, field schema, dimensions, endianness, `point_step`, `row_step`, `is_dense`, row padding, and additional fields such as intensity or ring; XYZ coordinates remain subject to lossy 14-bit quantization. When `cloudDownsample` is enabled explicitly, dimensions describe the downsampled cloud layout.
 
 Services no longer have a port:
 

@@ -7,3 +7,11 @@ string original_frame_id
 string codec
 float32 voxel_leaf_size
 bool receiver_stamp
+uint8 format_version
+string point_type
+sensor_msgs/PointField[] original_fields
+bool original_is_bigendian
+uint32 original_point_step
+uint32 original_row_step
+bool original_is_dense
+uint8[] sidecar_bytes

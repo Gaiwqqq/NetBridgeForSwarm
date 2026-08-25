@@ -32,6 +32,7 @@ struct TopicCfg {
   std::string type_;
   std::string src_hostname_;
   std::string my_hostname_;
+  std::string transport_name_{"zenoh"};
   XmlRpc::XmlRpcValue src_hostnames_xml;
   XmlRpc::XmlRpcValue dst_hostnames_xml;
   std::map<std::string, bool> dst_hostname_map_;
@@ -100,6 +101,7 @@ class TopicFactory {
   void recordSend(std::size_t bytes);
   void recordDrop();
   void recordTransportQueueDrop();
+  void recordCompleteImageEnvelope(std::uint64_t sequence);
   void recordReceive(std::size_t bytes, double latency_ms);
   void pruneMetricsWindowLocked(const ros::Time& now);
   void maybeAdaptImageQualityLocked(const ros::Time& now);

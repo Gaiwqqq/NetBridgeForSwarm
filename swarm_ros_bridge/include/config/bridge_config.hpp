@@ -43,9 +43,23 @@ struct ZenohOptions {
   bool multicast_scouting{true};
   bool gossip_scouting{true};
   bool compression_enabled{false};
+  std::string multicast_address;
   std::vector<std::string> listen_endpoints;
   std::vector<std::string> connect_endpoints;
   int service_timeout_ms{1000};
+
+  struct ImageSessionOptions {
+    bool enabled{false};
+    std::vector<std::string> listen_endpoints;
+    std::vector<std::string> connect_endpoints;
+  } image_session;
+
+  struct CloudSessionOptions {
+    bool enabled{false};
+    std::string multicast_address;
+    std::vector<std::string> listen_endpoints;
+    std::vector<std::string> connect_endpoints;
+  } cloud_session;
 };
 
 struct RuntimeOptions {

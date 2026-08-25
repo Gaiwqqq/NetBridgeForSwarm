@@ -39,6 +39,21 @@ std::string CodecLabel(const config::TopicRule& topic) {
   return topic.cloud_codec;
 }
 
+std::string TransportLabel(const config::BridgeConfig& config,
+                           const config::TopicRule& topic) {
+  if (config.zenoh.image_session.enabled &&
+      topic.msg_type == "sensor_msgs/Image") {
+    return "Zenoh / UDP";
+  }
+  if (config.zenoh.cloud_session.enabled &&
+      topic.msg_type == "sensor_msgs/PointCloud2") {
+    return "Zenoh / dedicated TCP";
+  }
+  return config.zenoh.image_session.enabled || config.zenoh.cloud_session.enabled
+             ? "Zenoh / TCP"
+             : "Zenoh";
+}
+
 std::string ImageResizeLabel(const config::TopicRule& topic) {
   if (topic.msg_type != "sensor_msgs/Image") {
     return "-";
@@ -236,7 +251,8 @@ ftxui::Element RenderTopicsScreen(
     std::vector<Element> config_lines = {
         paragraph("Sources: " + JoinHosts(topic.src_hosts)),
         paragraph("Targets: " + JoinHosts(topic.dst_hosts)),
-        paragraph("Transport: Zenoh / QoS: " + topic.qos_class),
+        paragraph("Transport: " + TransportLabel(config, topic) +
+                  " / QoS: " + topic.qos_class),
         text("Prefix: " + std::string(topic.prefix ? "on" : "off")),
         text("Same prefix: " + std::string(topic.same_prefix ? "on" : "off")),
     };
@@ -265,6 +281,29 @@ ftxui::Element RenderTopicsScreen(
                        ? std::to_string(live_info.current_jpeg_quality)
                        : "-");
       }
+      AppendLine(&config_lines,
+                 "Receiver loss: ",
+                 has_recv_info
+                     ? FormatMetric(recv_info.image_loss_rate_pct, "%")
+                     : "--");
+      AppendLine(&config_lines,
+                 "Complete frames: ",
+                 has_recv_info
+                     ? FormatMetric(
+                           recv_info.complete_frame_success_rate_pct, "%")
+                     : "--");
+      AppendLine(&config_lines,
+                 "Effective RX: ",
+                 has_recv_info
+                     ? FormatMetric(
+                           recv_info.effective_recv_bandwidth_kbps, " kbps")
+                     : "--");
+      AppendLine(&config_lines,
+                 "Decoded / expected: ",
+                 has_recv_info
+                     ? std::to_string(recv_info.decoded_frames) + " / " +
+                           std::to_string(recv_info.expected_frames)
+                     : "--");
     }
 
     transfer_summary = vbox({
@@ -306,7 +345,7 @@ ftxui::Element RenderTopicsScreen(
               }) |
               color(Color::GrayLight);
 
-    compact_details = vbox({
+    std::vector<Element> compact_detail_lines = {
         paragraph(topic.topic_name) | bold | color(Color::White),
         hbox({
             text(topic.qos_class + " / ") | color(Color::CyanLight),
@@ -319,7 +358,29 @@ ftxui::Element RenderTopicsScreen(
                      : "--") |
                 color(Color::Magenta1),
         }),
-    });
+    };
+    if (topic.msg_type == "sensor_msgs/Image") {
+      compact_detail_lines.push_back(hbox({
+          text("loss ") | color(Color::GrayLight),
+          text(has_recv_info
+                   ? FormatMetric(recv_info.image_loss_rate_pct, "%")
+                   : "--") |
+              color(Color::White),
+          text("  complete ") | color(Color::GrayLight),
+          text(has_recv_info
+                   ? FormatMetric(
+                         recv_info.complete_frame_success_rate_pct, "%")
+                   : "--") |
+              color(Color::White),
+          filler(),
+          text(has_recv_info
+                   ? FormatMetric(
+                         recv_info.effective_recv_bandwidth_kbps, " kbps")
+                   : "--") |
+              color(Color::CyanLight),
+      }));
+    }
+    compact_details = vbox(std::move(compact_detail_lines));
     short_details = hbox({
                         text(" " + EndEllipsis(
                                         topic.topic_name,

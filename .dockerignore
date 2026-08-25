@@ -1,0 +1,16 @@
+.git
+**/.git
+**/__pycache__
+**/*.pyc
+**/.cache
+docs
+swarm_ros_bridge/docs
+swarm_ros_bridge/test
+*** Add File: /gwq/ws_netbridge_dev/src/NetBridgeForSwarm/docker/entrypoint.sh
+#!/usr/bin/env bash
+set -e
+
+source /opt/ros/noetic/setup.bash
+source /opt/netbridge/setup.bash
+
+exec "$@"

@@ -1,11 +1,12 @@
 # NetBridgeForSwarm (Zenoh 1.9) [中文](README-zh.md)
 
-NetBridgeForSwarm is a ROS1 Noetic bridge for multi-robot systems. This version uses one process-wide Zenoh session for topics, images, point clouds, and services while preserving ROS serialization, adaptive JPEG quality, Draco/PCL point-cloud compression, prefix rules, and directed `to_drone_ids` routing.
+NetBridgeForSwarm is a ROS1 Noetic bridge for multi-robot systems. This version uses three Zenoh sessions: UDP for images, a dedicated TCP session for PointCloud2, and a TCP control session for other topics, services, and liveliness. ROS serialization, adaptive JPEG quality, Draco/PCL point-cloud compression, prefix rules, and directed `to_drone_ids` routing are preserved.
 
 Key changes:
 
 - ZeroMQ, per-topic ports, and the custom UDP image-fragmentation runtime are removed.
 - Topics use Zenoh pub/sub; services use Zenoh query/reply.
+- Control, image, and cloud traffic use TCP, UDP, and an isolated TCP session respectively. The cloud session uses a separate scouting group; image/cloud sessions do not publish duplicate liveliness tokens.
 - The versioned `NBZ1` envelope carries source, sequence, source time, ROS type/MD5, ROS header metadata, payload kind, and payload.
 - Zenoh callbacks only enqueue work into bounded queues. Joinable bridge workers perform ROS deserialization and publication.
 - `state` and `bulk` queues keep only the newest sample; `command` and service traffic use blocking congestion control.
@@ -84,9 +85,31 @@ zenoh:
   service_timeout_ms: 1000
   service_worker_threads: 2
   service_queue_capacity: 64
+  image_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    compression_enabled: false
+    listen_endpoints:
+      - "udp/0.0.0.0:0?rel=1;mixed_rel=1;multistream=1"
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7448
+  cloud_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    multicast_address: "224.0.0.225:7446"
+    compression_enabled: false
+    listen_endpoints: ["tcp/0.0.0.0:0"]
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7449
 ```
 
-If the airborne network blocks multicast, put one or more static peers such as `tcp/192.168.123.6:7447` in `connect_endpoints`. See [`zenoh_quic_example.yaml`](swarm_ros_bridge/config/zenoh_quic_example.yaml) for the controlled-network TCP/QUIC comparison. QUIC mixed reliability maps `Reliable` traffic to streams and `BestEffort` traffic to datagrams when built by the supplied script. See the [Zenoh QUIC documentation](https://zenoh.io/docs/manual/quic/) for endpoint details.
+Root endpoints belong to the TCP control session, `image_session` endpoints to UDP images, and `cloud_session` endpoints to the dedicated PointCloud2 TCP session. Image and cloud topics must remain `qos_class: bulk`. The cloud scouting address separates the two TCP discovery domains.
+
+When multicast is unavailable, configure all three `connect_endpoints` sets, conventionally using ports 7447, 7448, and 7449. See [`zenoh_three_session_example.yaml`](swarm_ros_bridge/config/zenoh_three_session_example.yaml). UDP endpoints are unencrypted and should only be used on a trusted, isolated robot LAN.
 
 Every topic must define `qos_class`:
 
@@ -135,7 +158,7 @@ Clients call `/drone1/add_two_ints`. The server rejects requests whose envelope 
 - Service: `netbridge/v1/service/<server>/<ros-service>`
 - Liveliness: `netbridge/v1/alive/<hostname>`
 
-`/swarm_bridge/diagnostics` now reports transport and QoS class, session/link state, peer/router counts, estimated reconnections, bounded-queue drops, service timeouts, and envelope decode failures. `bridge_tui` continues to show topic rate, bandwidth, latency, jitter, and JPEG state.
+`/swarm_bridge/diagnostics` reports separate control, image, and cloud session rows. Image receiver rows include sequence-gap loss, complete-frame success, and the rolling three-second effective decoded JPEG bandwidth. These are end-to-end bridge-frame metrics, not raw UDP datagram loss. Liveliness remains on the control session only.
 
 The TUI reflows at runtime: narrow terminals use top navigation and compact lists, medium terminals stack list/detail panels, and wide terminals use a sidebar with side-by-side inspectors. Resize the terminal without restarting. The validated minimum is `40x12`; `80x24` or larger is recommended for routine use.
 
@@ -146,10 +169,12 @@ Run the local tests after building:
 ```bash
 ./devel/lib/swarm_ros_bridge/test_bridge_transport
 ./devel/lib/swarm_ros_bridge/test_zenoh_transport_smoke
+./devel/lib/swarm_ros_bridge/test_zenoh_three_session_smoke
+./devel/lib/swarm_ros_bridge/test_topic_metrics
 ./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-The smoke test starts two real loopback Zenoh peers and verifies both pub/sub and query/reply. See [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md) for the physical-link baseline, alternating TCP/QUIC trials, acceptance criteria, and rollback gate.
+The three-session smoke test verifies isolated control TCP, image UDP, and cloud TCP paths. Run `./swarm_ros_bridge/scripts/three_node_transport_test.sh` for a repeatable three-ROS-master, two-drone/one-station many-to-one and one-to-many test covering Odometry, Image, and Draco PointCloud2. See [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md) for physical-link acceptance and rollback criteria.
 
 Launch commands remain unchanged:
 

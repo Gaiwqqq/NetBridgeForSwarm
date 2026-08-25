@@ -157,6 +157,10 @@ class ZenohTransport::Impl : public std::enable_shared_from_this<ZenohTransport:
     zenoh_config.insert_json5("mode", JsonString(config.mode));
     zenoh_config.insert_json5("scouting/multicast/enabled",
                               config.multicast_scouting ? "true" : "false");
+    if (!config.multicast_scouting_address.empty()) {
+      zenoh_config.insert_json5("scouting/multicast/address",
+                                JsonString(config.multicast_scouting_address));
+    }
     zenoh_config.insert_json5("scouting/gossip/enabled",
                               config.gossip_scouting ? "true" : "false");
     if (!config.listen_endpoints.empty()) {
@@ -165,6 +169,10 @@ class ZenohTransport::Impl : public std::enable_shared_from_this<ZenohTransport:
     if (!config.connect_endpoints.empty()) {
       zenoh_config.insert_json5("connect/endpoints", JsonArray(config.connect_endpoints));
     }
+    if (!config.allowed_link_protocols.empty()) {
+      zenoh_config.insert_json5("transport/link/protocols",
+                                JsonArray(config.allowed_link_protocols));
+    }
     zenoh_config.insert_json5("transport/unicast/compression/enabled",
                               config.compression_enabled ? "true" : "false");
     zenoh_config.insert_json5("transport/multicast/compression/enabled",
@@ -172,28 +180,30 @@ class ZenohTransport::Impl : public std::enable_shared_from_this<ZenohTransport:
 
     session_ = std::make_unique<zenoh::Session>(
         zenoh::Session::open(std::move(zenoh_config)));
-    zenoh::Session::LivelinessSubscriberOptions presence_options;
-    presence_options.history = true;
-    liveliness_subscriber_ = std::make_unique<zenoh::Subscriber<void>>(
-        session_->liveliness_declare_subscriber(
-            zenoh::KeyExpr("netbridge/v1/alive/*"),
-            [this](const zenoh::Sample& sample) {
-              std::string discovered_hostname;
-              if (!ParseAliveKey(
-                      std::string(sample.get_keyexpr().as_string_view()),
-                      &discovered_hostname)) {
-                return;
-              }
-              if (sample.get_kind() == Z_SAMPLE_KIND_PUT) {
-                UpdatePresence(discovered_hostname, true);
-              } else if (sample.get_kind() == Z_SAMPLE_KIND_DELETE) {
-                UpdatePresence(discovered_hostname, false);
-              }
-            },
-            zenoh::closures::none, std::move(presence_options)));
-    UpdatePresence(hostname, true);
-    liveliness_token_ = std::make_unique<zenoh::LivelinessToken>(
-        session_->liveliness_declare_token(zenoh::KeyExpr(AliveKey(hostname))));
+    if (config.enable_liveliness) {
+      zenoh::Session::LivelinessSubscriberOptions presence_options;
+      presence_options.history = true;
+      liveliness_subscriber_ = std::make_unique<zenoh::Subscriber<void>>(
+          session_->liveliness_declare_subscriber(
+              zenoh::KeyExpr("netbridge/v1/alive/*"),
+              [this](const zenoh::Sample& sample) {
+                std::string discovered_hostname;
+                if (!ParseAliveKey(
+                        std::string(sample.get_keyexpr().as_string_view()),
+                        &discovered_hostname)) {
+                  return;
+                }
+                if (sample.get_kind() == Z_SAMPLE_KIND_PUT) {
+                  UpdatePresence(discovered_hostname, true);
+                } else if (sample.get_kind() == Z_SAMPLE_KIND_DELETE) {
+                  UpdatePresence(discovered_hostname, false);
+                }
+              },
+              zenoh::closures::none, std::move(presence_options)));
+      UpdatePresence(hostname, true);
+      liveliness_token_ = std::make_unique<zenoh::LivelinessToken>(
+          session_->liveliness_declare_token(zenoh::KeyExpr(AliveKey(hostname))));
+    }
     session_open_.store(true);
   }
 

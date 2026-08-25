@@ -1,0 +1,106 @@
+config:
+  debug: false
+  odom_convert: false
+  monitor_node: true
+  warn_threshold: 3
+  monitor_rate_hz: 100
+
+hosts:
+  - groundStation0
+  - drone1
+  - drone2
+
+zenoh:
+  mode: peer
+  multicast_scouting: false
+  gossip_scouting: false
+  compression_enabled: false
+  listen_endpoints: []
+  connect_endpoints: []
+  service_timeout_ms: 1000
+  image_session:
+    enabled: true
+    multicast_scouting: false
+    gossip_scouting: false
+    compression_enabled: false
+    listen_endpoints: []
+    connect_endpoints: []
+  cloud_session:
+    enabled: true
+    multicast_scouting: false
+    gossip_scouting: false
+    multicast_address: "224.0.0.225:7446"
+    compression_enabled: false
+    listen_endpoints: []
+    connect_endpoints: []
+
+services: []
+
+topics:
+  # drone1 + drone2 -> station (prefix preserves source identity).
+  - topic_name: /test/m2o/odom
+    msg_type: nav_msgs/Odometry
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 10
+    prefix: true
+    same_prefix: false
+
+  - topic_name: /test/m2o/image
+    msg_type: sensor_msgs/Image
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    imgResizeRate: 1.0
+    imgJpegQuality: 80
+    imgAdaptiveQuality: false
+
+  - topic_name: /test/m2o/cloud
+    msg_type: sensor_msgs/PointCloud2
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    cloudCompress: true
+    cloudCodec: draco
+    cloudDownsample: -1.0
+
+  # station -> drone1 + drone2.
+  - topic_name: /test/o2m/odom
+    msg_type: nav_msgs/Odometry
+    qos_class: state
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 10
+    prefix: false
+    same_prefix: false
+
+  - topic_name: /test/o2m/image
+    msg_type: sensor_msgs/Image
+    qos_class: bulk
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+    imgResizeRate: 1.0
+    imgJpegQuality: 80
+    imgAdaptiveQuality: false
+
+  - topic_name: /test/o2m/cloud
+    msg_type: sensor_msgs/PointCloud2
+    qos_class: bulk
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+    cloudCompress: true
+    cloudCodec: draco
+    cloudDownsample: -1.0

@@ -40,7 +40,13 @@ class BridgeFactory {
   std::map<std::string, bool> src_hostname_map_;
   std::map<std::string, std::string> host_map_;
   swarm_ros_bridge::transport::ZenohTransportConfig zenoh_config_;
-  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transport_;
+  swarm_ros_bridge::transport::ZenohTransportConfig image_zenoh_config_;
+  swarm_ros_bridge::transport::ZenohTransportConfig cloud_zenoh_config_;
+  bool image_session_enabled_{false};
+  bool cloud_session_enabled_{false};
+  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> control_transport_;
+  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> image_transport_;
+  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> cloud_transport_;
   ros::Publisher diagnostics_pub_;
   ros::Timer diagnostics_timer_;
   bool stopped_{false};
@@ -50,6 +56,8 @@ class BridgeFactory {
   void getServiceConfigAndInit();
   void topicOperatorInit();
   void publishDiagnostics(const ros::TimerEvent& event);
+  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transportForTopic(
+      const TopicCfg& topic) const;
   void expandHostSelection(const XmlRpc::XmlRpcValue& selection,
                            std::map<std::string, bool>* output) const;
 };

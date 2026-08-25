@@ -3,7 +3,9 @@ project(cv_bridge_noetic_fit_version)
 
 find_package(catkin REQUIRED COMPONENTS rosconsole sensor_msgs)
 
-if(NOT ANDROID)
+option(CV_BRIDGE_BUILD_PYTHON "Build the Python cv_bridge bindings" ON)
+
+if(CV_BRIDGE_BUILD_PYTHON AND NOT ANDROID)
   find_package(PythonLibs)
 
   if(PYTHONLIBS_VERSION_STRING VERSION_LESS "3.8")
@@ -40,12 +42,14 @@ catkin_package(
   CFG_EXTRAS cv_bridge-extras.cmake
 )
 
-catkin_python_setup()
+if(CV_BRIDGE_BUILD_PYTHON)
+  catkin_python_setup()
+endif()
 
 include_directories(include ${Boost_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${catkin_INCLUDE_DIRS})
 link_directories(${Boost_LIBRARY_DIRS})
 
-if(NOT ANDROID)
+if(CV_BRIDGE_BUILD_PYTHON AND NOT ANDROID)
 add_subdirectory(python)
 endif()
 add_subdirectory(src)
@@ -55,6 +59,6 @@ endif()
 
 # install the include folder
 install(
-  DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+  DIRECTORY include/cv_bridge/
+  DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}/cv_bridge
 )

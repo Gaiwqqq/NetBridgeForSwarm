@@ -32,10 +32,9 @@ add_subdirectory(${SWARM_ROS_BRIDGE_VENDOR_DIR}/draco
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
-  roslib
   topic_tools
   cv_bridge_noetic_fit_version
-  image_transport
+  pcl_conversions
   message_generation
   std_msgs
   geometry_msgs
@@ -44,11 +43,8 @@ find_package(catkin REQUIRED COMPONENTS
   visualization_msgs
 )
 
-find_package(Eigen3 REQUIRED)
-find_package(PCL REQUIRED)
-find_package(PkgConfig REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(JPEG REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common filters io octree)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 find_package(zenohc 1.9.0 EXACT REQUIRED CONFIG)
 find_package(zenohcxx 1.9.0 EXACT REQUIRED CONFIG)
 
@@ -74,13 +70,17 @@ generate_messages(
 
 catkin_package(
    INCLUDE_DIRS include
-   CATKIN_DEPENDS message_runtime cv_bridge_noetic_fit_version
-)
-
-catkin_install_python(PROGRAMS
-  scripts/bridge_test_publisher.py
-  scripts/three_node_transport_test.sh
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+   CATKIN_DEPENDS
+     roscpp
+     topic_tools
+     cv_bridge_noetic_fit_version
+     pcl_conversions
+     message_runtime
+     std_msgs
+     geometry_msgs
+     sensor_msgs
+     nav_msgs
+     visualization_msgs
 )
 
 include_directories(
@@ -88,8 +88,6 @@ include_directories(
     SYSTEM
     ${catkin_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
-    ${JPEG_INCLUDE_DIR}
-    ${EIGEN3_INCLUDE_DIRS}
     ${PCL_INCLUDE_DIRS}
     ${SWARM_ROS_BRIDGE_VENDOR_DIR}/FTXUI/include
     ${CMAKE_BINARY_DIR}
@@ -120,7 +118,6 @@ target_link_libraries(bridge_new
     ${catkin_LIBRARIES}
     ${OpenCV_LIBS}
     pthread
-    ${JPEG_LIBRARIES}
     ${PCL_LIBRARIES}
     draco::draco
     zenohcxx::zenohc
@@ -146,99 +143,118 @@ add_dependencies(bridge_tui
         ${catkin_EXPORTED_TARGETS}
 )
 target_link_libraries(bridge_tui
-    ${catkin_LIBRARIES}
+    ${roscpp_LIBRARIES}
     pthread
     ftxui::ftxui
-    ${PCL_LIBRARIES}
     draco::draco
 )
 
-add_executable(test_md5 test/md5test.cpp)
-add_dependencies(test_md5
-        ${${PROJECT_NAME}_EXPORTED_TARGETS}
-        ${catkin_EXPORTED_TARGETS}
-)
-target_link_libraries(test_md5
-        ${catkin_LIBRARIES}
+install(TARGETS bridge_new bridge_tui
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-add_executable(a_simple_server test/a_simple_server.cpp)
-add_dependencies(a_simple_server
-        ${${PROJECT_NAME}_EXPORTED_TARGETS}
-        ${catkin_EXPORTED_TARGETS}
-)
-target_link_libraries(a_simple_server
-        ${catkin_LIBRARIES}
+install(DIRECTORY config launch
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 
-add_executable(a_simple_client test/a_simple_client.cpp)
-add_dependencies(a_simple_client
-        ${${PROJECT_NAME}_EXPORTED_TARGETS}
-        ${catkin_EXPORTED_TARGETS}
-)
-target_link_libraries(a_simple_client
-        ${catkin_LIBRARIES}
+install(DIRECTORY include/
+  DESTINATION ${CATKIN_GLOBAL_INCLUDE_DESTINATION}
 )
 
-enable_testing()
-add_executable(test_bridge_transport
-    test/bridge_transport_test.cpp
-    src/transport/bridge_transport.cpp
-)
-target_include_directories(test_bridge_transport PRIVATE include)
-add_test(NAME bridge_transport_wire COMMAND test_bridge_transport)
+if(CATKIN_ENABLE_TESTING)
+  catkin_install_python(PROGRAMS
+    scripts/bridge_test_publisher.py
+    scripts/three_node_transport_test.sh
+    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  )
 
-add_executable(test_draco_pointcloud_codec
-    test/draco_pointcloud_codec_test.cpp
-    src/transport/pointcloud_codec.cpp
-    src/transport/draco_pointcloud_codec.cpp
-)
-add_dependencies(test_draco_pointcloud_codec
-    ${${PROJECT_NAME}_EXPORTED_TARGETS}
-    ${catkin_EXPORTED_TARGETS}
-)
-target_include_directories(test_draco_pointcloud_codec PRIVATE include)
-target_link_libraries(test_draco_pointcloud_codec
-    ${catkin_LIBRARIES}
-    draco::draco
-)
-add_test(NAME draco_pointcloud_codec COMMAND test_draco_pointcloud_codec)
+  add_executable(test_md5 test/md5test.cpp)
+  add_dependencies(test_md5
+          ${${PROJECT_NAME}_EXPORTED_TARGETS}
+          ${catkin_EXPORTED_TARGETS}
+  )
+  target_link_libraries(test_md5
+          ${catkin_LIBRARIES}
+  )
 
-add_executable(test_zenoh_transport_smoke
-    test/zenoh_transport_smoke_test.cpp
-    src/transport/bridge_transport.cpp
-    src/transport/zenoh_transport.cpp
-)
-target_include_directories(test_zenoh_transport_smoke PRIVATE include)
-target_link_libraries(test_zenoh_transport_smoke
-    pthread
-    zenohcxx::zenohc
-)
-add_test(NAME zenoh_transport_smoke COMMAND test_zenoh_transport_smoke)
+  add_executable(a_simple_server test/a_simple_server.cpp)
+  add_dependencies(a_simple_server
+          ${${PROJECT_NAME}_EXPORTED_TARGETS}
+          ${catkin_EXPORTED_TARGETS}
+  )
+  target_link_libraries(a_simple_server
+          ${catkin_LIBRARIES}
+  )
 
-add_executable(test_zenoh_three_session_smoke
-    test/zenoh_three_session_smoke_test.cpp
-    src/transport/bridge_transport.cpp
-    src/transport/zenoh_transport.cpp
-)
-target_include_directories(test_zenoh_three_session_smoke PRIVATE include)
-target_link_libraries(test_zenoh_three_session_smoke
-    pthread
-    zenohcxx::zenohc
-)
-add_test(NAME zenoh_three_session_smoke COMMAND test_zenoh_three_session_smoke)
+  add_executable(a_simple_client test/a_simple_client.cpp)
+  add_dependencies(a_simple_client
+          ${${PROJECT_NAME}_EXPORTED_TARGETS}
+          ${catkin_EXPORTED_TARGETS}
+  )
+  target_link_libraries(a_simple_client
+          ${catkin_LIBRARIES}
+  )
 
-add_executable(test_topic_metrics
-    test/topic_metrics_test.cpp
-    src/diagnostics/topic_metrics.cpp
-)
-target_include_directories(test_topic_metrics PRIVATE include)
-target_link_libraries(test_topic_metrics ${catkin_LIBRARIES})
-add_test(NAME image_receive_metrics COMMAND test_topic_metrics)
+  enable_testing()
+  add_executable(test_bridge_transport
+      test/bridge_transport_test.cpp
+      src/transport/bridge_transport.cpp
+  )
+  target_include_directories(test_bridge_transport PRIVATE include)
+  add_test(NAME bridge_transport_wire COMMAND test_bridge_transport)
 
-add_executable(test_tui_layout
-    test/tui_layout_test.cpp
-)
-target_include_directories(test_tui_layout PRIVATE include)
-target_link_libraries(test_tui_layout ftxui::ftxui)
-add_test(NAME tui_responsive_layout COMMAND test_tui_layout)
+  add_executable(test_draco_pointcloud_codec
+      test/draco_pointcloud_codec_test.cpp
+      src/transport/pointcloud_codec.cpp
+      src/transport/draco_pointcloud_codec.cpp
+  )
+  add_dependencies(test_draco_pointcloud_codec
+      ${${PROJECT_NAME}_EXPORTED_TARGETS}
+      ${catkin_EXPORTED_TARGETS}
+  )
+  target_include_directories(test_draco_pointcloud_codec PRIVATE include)
+  target_link_libraries(test_draco_pointcloud_codec
+      ${catkin_LIBRARIES}
+      draco::draco
+  )
+  add_test(NAME draco_pointcloud_codec COMMAND test_draco_pointcloud_codec)
+
+  add_executable(test_zenoh_transport_smoke
+      test/zenoh_transport_smoke_test.cpp
+      src/transport/bridge_transport.cpp
+      src/transport/zenoh_transport.cpp
+  )
+  target_include_directories(test_zenoh_transport_smoke PRIVATE include)
+  target_link_libraries(test_zenoh_transport_smoke
+      pthread
+      zenohcxx::zenohc
+  )
+  add_test(NAME zenoh_transport_smoke COMMAND test_zenoh_transport_smoke)
+
+  add_executable(test_zenoh_three_session_smoke
+      test/zenoh_three_session_smoke_test.cpp
+      src/transport/bridge_transport.cpp
+      src/transport/zenoh_transport.cpp
+  )
+  target_include_directories(test_zenoh_three_session_smoke PRIVATE include)
+  target_link_libraries(test_zenoh_three_session_smoke
+      pthread
+      zenohcxx::zenohc
+  )
+  add_test(NAME zenoh_three_session_smoke COMMAND test_zenoh_three_session_smoke)
+
+  add_executable(test_topic_metrics
+      test/topic_metrics_test.cpp
+      src/diagnostics/topic_metrics.cpp
+  )
+  target_include_directories(test_topic_metrics PRIVATE include)
+  target_link_libraries(test_topic_metrics ${catkin_LIBRARIES})
+  add_test(NAME image_receive_metrics COMMAND test_topic_metrics)
+
+  add_executable(test_tui_layout
+      test/tui_layout_test.cpp
+  )
+  target_include_directories(test_tui_layout PRIVATE include)
+  target_link_libraries(test_tui_layout ftxui::ftxui)
+  add_test(NAME tui_responsive_layout COMMAND test_tui_layout)
+endif()

@@ -57,6 +57,27 @@ source /opt/ros/noetic/setup.bash
 catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 ```
 
+### 最小依赖 Docker 镜像
+
+仓库根目录的 `Dockerfile` 使用 `ros:noetic-ros-core-focal` 多阶段构建。最终镜像不包含编译器、ROS desktop/perception、PCL/OpenCV 开发头文件、测试程序或另一架构的 Zenoh 包，同时支持仓库已有的 `amd64` 和 `arm64` Zenoh 1.9 包。
+
+```bash
+docker build --build-arg BUILD_JOBS=4 -t netbridge:noetic .
+```
+
+默认启动地面站配置。Zenoh 自动发现需要使用组播时，建议使用 host 网络：
+
+```bash
+docker run --rm --network host netbridge:noetic
+```
+
+机载端可覆盖默认命令，并传入 `DRONE_ID`：
+
+```bash
+docker run --rm --network host -e DRONE_ID=1 netbridge:noetic \
+  roslaunch swarm_ros_bridge example_bridge_drone.launch
+```
+
 ## 配置
 
 主机目录不再包含端口或必需 IP：

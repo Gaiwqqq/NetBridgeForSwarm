@@ -1,6 +1,6 @@
 # Zenoh 迁移实机验证规程
 
-本文档用于在 4–10 架无人机的真实无线链路上比较 Legacy ZeroMQ/UDP、Zenoh TCP 和 Zenoh QUIC mixed reliability。不要使用 `netem` 代替实机链路测试。
+本文档用于在 4–10 架无人机的真实无线链路上比较 Legacy ZeroMQ/UDP、Zenoh 单 TCP session 基线和 Zenoh 控制 TCP + 图像 UDP + 点云 TCP 三 session。不要使用 `netem` 代替实机链路测试。
 
 ## 1. 测试前冻结项
 
@@ -41,9 +41,9 @@
 
 保存 rosbag、bridge 诊断、无线驱动统计和系统资源采样。基线原始数据只追加、不覆盖。
 
-## 4. Zenoh TCP/QUIC 对照
+## 4. Zenoh 单/三 session 对照
 
-采用 `Legacy → Zenoh TCP → Legacy → Zenoh QUIC` 的交替顺序，并在下一组反转 Zenoh 次序，以减小天气和无线环境随时间变化造成的偏差。
+采用 `Legacy → Zenoh TCP → Legacy → Zenoh Triple` 的交替顺序，并在下一组反转 Zenoh 次序，以减小天气和无线环境随时间变化造成的偏差。
 
 ### TCP peer
 
@@ -61,23 +61,38 @@ zenoh:
 
 若 multicast 工作正常，可清空 `connect_endpoints`；仍建议保留至少一个明确的 seed-fallback 测试轮次。
 
-### QUIC mixed reliability
+### TCP 控制 + UDP 图像 + TCP 点云三 session
 
-受控、隔离且可信的机群网可以使用无加密 UDP/QUIC endpoint：
+受控、隔离且可信的机群网使用相互隔离的 TCP 和 UDP endpoint：
 
 ```yaml
 zenoh:
   mode: peer
+  multicast_scouting: true
+  gossip_scouting: true
   compression_enabled: false
   listen_endpoints:
-    - "udp/0.0.0.0:7447?rel=1;multistream=1;mixed_rel=1"
+    - "tcp/0.0.0.0:7447"
   connect_endpoints:
-    - "udp/192.168.123.6:7447?rel=1;multistream=1;mixed_rel=1"
+    - "tcp/192.168.123.6:7447"
+  image_session:
+    enabled: true
+    listen_endpoints:
+      - "udp/0.0.0.0:7448?rel=1;mixed_rel=1;multistream=1"
+    connect_endpoints:
+      - "udp/192.168.123.6:7448?rel=1;mixed_rel=1;multistream=1"
+  cloud_session:
+    enabled: true
+    multicast_address: "224.0.0.225:7446"
+    listen_endpoints:
+      - "tcp/0.0.0.0:7449"
+    connect_endpoints:
+      - "tcp/192.168.123.6:7449"
 ```
 
-公网或非可信网络必须改用带证书配置的 `quic/` endpoint。不要把上例视为通用安全配置。为每个监听节点分配不冲突的地址/端口，不能把示例地址原样部署到整组设备。
+UDP 图像 session 不加密，只能用于可信隔离网络。公网或非可信网络需要另行设计带证书的 QUIC/TLS 方案。不能把示例 seed 地址原样部署到整组设备。
 
-每种 transport 重复 Legacy 基线的四类负载。重点检查点云/图像满载时 odometry 和 service 是否被饿死，以及单 session TCP 是否出现跨流队头阻塞。
+每种架构重复 Legacy 基线的四类负载。重点检查图像满载时 UDP 丢帧/新鲜度、控制 TCP 上的 odometry 与 service 是否保持稳定、点云专用 TCP 的有效吞吐，以及三条 session 的离网恢复是否相互影响。
 
 ## 5. 功能矩阵
 
@@ -100,14 +115,14 @@ zenoh:
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | Legacy | | | | | | | | |
 | Zenoh TCP | | | | | | | | |
-| Zenoh QUIC | | | | | | | | |
+| Zenoh Triple | | | | | | | | |
 
 传输选择顺序为：
 
 1. 关键流和 service 成功率最高；
 2. 关键流 P95/P99 延迟最低；
 3. bulk 最新有效吞吐最高；
-4. 指标接近时选择配置和运维更简单的 TCP。
+4. 三 session 的关键流稳定性不低于单 TCP，并能改善图像新鲜度或跨流阻塞。
 
 ## 7. 硬性验收与切换
 

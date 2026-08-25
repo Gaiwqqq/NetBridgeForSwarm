@@ -24,6 +24,9 @@ struct TopicMetrics {
   double avg_latency_ms{0.0};
   double jitter_ms{0.0};
   double bandwidth_kbps{0.0};
+  double effective_recv_bandwidth_kbps{0.0};
+  double image_loss_rate_pct{0.0};
+  double complete_frame_success_rate_pct{0.0};
   double stability_score{100.0};
   double last_recv_age_ms{0.0};
   bool adaptive_quality_enabled{false};
@@ -34,6 +37,11 @@ struct TopicMetrics {
   std::size_t total_messages{0};
   std::size_t dropped_messages{0};
   std::uint64_t transport_queue_drops{0};
+  std::uint64_t expected_frames{0};
+  std::uint64_t transport_complete_frames{0};
+  std::uint64_t decoded_frames{0};
+  std::uint64_t inferred_lost_frames{0};
+  std::uint64_t sequence_resets{0};
 };
 
 struct TopicRuntimeState {
@@ -69,7 +77,19 @@ struct TopicRuntimeState {
   double avg_latency_ms{0.0};
   double jitter_ms{0.0};
   double last_latency_ms{-1.0};
+  bool frame_sequence_initialized{false};
+  std::uint64_t last_frame_sequence{0};
+  std::uint64_t expected_frames{0};
+  std::uint64_t transport_complete_frames{0};
+  std::uint64_t inferred_lost_frames{0};
+  std::uint64_t sequence_resets{0};
 };
+
+// Observe one complete, validated image envelope at the receiver. Sequence gaps
+// measure end-to-end bridge-frame loss; duplicate sequences are ignored and a
+// lower sequence starts a new sender epoch.
+void ObserveCompleteFrameSequence(std::uint64_t sequence,
+                                  TopicRuntimeState* state);
 
 TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& now);
 

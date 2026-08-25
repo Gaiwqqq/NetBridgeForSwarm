@@ -58,6 +58,34 @@ std::vector<std::string> XmlRpcToStringVector(
   return output;
 }
 
+bool UsesEndpointProtocol(const std::string& endpoint,
+                          const std::string& protocol) {
+  return endpoint.rfind(protocol + "/", 0) == 0;
+}
+
+std::string TopicTransportName(bool image_session_enabled,
+                               bool cloud_session_enabled,
+                               const std::string& ros_type) {
+  if (image_session_enabled && ros_type == "sensor_msgs/Image") {
+    return "zenoh-udp";
+  }
+  if (cloud_session_enabled && ros_type == "sensor_msgs/PointCloud2") {
+    return "zenoh-cloud-tcp";
+  }
+  return image_session_enabled || cloud_session_enabled ? "zenoh-tcp" : "zenoh";
+}
+
+void ValidateEndpointProtocols(const std::vector<std::string>& endpoints,
+                               const std::string& protocol,
+                               const std::string& config_name) {
+  for (const std::string& endpoint : endpoints) {
+    if (!UsesEndpointProtocol(endpoint, protocol)) {
+      throw std::invalid_argument(config_name + " endpoint must use " +
+                                  protocol + "/: " + endpoint);
+    }
+  }
+}
+
 }  // namespace
 
 BridgeFactory::BridgeFactory(ros::NodeHandle& node,
@@ -79,8 +107,18 @@ BridgeFactory::BridgeFactory(ros::NodeHandle& node,
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> NetBridge Zenoh >>>>>>>>>>>>>>>>>>>>>");
   getMyHostName();
   getHostTopicAndTransportConfig();
-  transport_ = std::make_shared<swarm_ros_bridge::transport::ZenohTransport>(
+  control_transport_ = std::make_shared<swarm_ros_bridge::transport::ZenohTransport>(
       zenoh_config_, my_hostname_);
+  if (image_session_enabled_) {
+    image_transport_ =
+        std::make_shared<swarm_ros_bridge::transport::ZenohTransport>(
+            image_zenoh_config_, my_hostname_);
+  }
+  if (cloud_session_enabled_) {
+    cloud_transport_ =
+        std::make_shared<swarm_ros_bridge::transport::ZenohTransport>(
+            cloud_zenoh_config_, my_hostname_);
+  }
 
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> Topic List >>>>>>>>>>>>>>>>>>>>>>");
   topicOperatorInit();
@@ -192,6 +230,10 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
       zenoh_config_.compression_enabled =
           XmlRpcToBool(zenoh_xml["compression_enabled"], false);
     }
+    if (zenoh_xml.hasMember("multicast_address")) {
+      zenoh_config_.multicast_scouting_address =
+          XmlRpcToString(zenoh_xml["multicast_address"], "");
+    }
     if (zenoh_xml.hasMember("listen_endpoints")) {
       zenoh_config_.listen_endpoints =
           XmlRpcToStringVector(zenoh_xml["listen_endpoints"]);
@@ -226,6 +268,161 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
         }
       }
     }
+
+    if (zenoh_xml.hasMember("image_session")) {
+      const XmlRpc::XmlRpcValue& image_xml = zenoh_xml["image_session"];
+      if (image_xml.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
+        throw std::invalid_argument("zenoh.image_session must be a struct");
+      }
+      image_session_enabled_ = image_xml.hasMember("enabled")
+                                   ? XmlRpcToBool(image_xml["enabled"], false)
+                                   : false;
+      if (image_session_enabled_) {
+        image_zenoh_config_ = zenoh_config_;
+        image_zenoh_config_.enable_liveliness = false;
+        image_zenoh_config_.service_worker_threads = 1U;
+        image_zenoh_config_.service_queue_capacity = 1U;
+        if (image_xml.hasMember("mode")) {
+          image_zenoh_config_.mode =
+              XmlRpcToString(image_xml["mode"], zenoh_config_.mode);
+        }
+        if (image_xml.hasMember("multicast_scouting")) {
+          image_zenoh_config_.multicast_scouting = XmlRpcToBool(
+              image_xml["multicast_scouting"],
+              zenoh_config_.multicast_scouting);
+        }
+        if (image_xml.hasMember("gossip_scouting")) {
+          image_zenoh_config_.gossip_scouting = XmlRpcToBool(
+              image_xml["gossip_scouting"], zenoh_config_.gossip_scouting);
+        }
+        if (image_xml.hasMember("multicast_address")) {
+          image_zenoh_config_.multicast_scouting_address =
+              XmlRpcToString(image_xml["multicast_address"], "");
+        }
+        if (image_xml.hasMember("compression_enabled")) {
+          image_zenoh_config_.compression_enabled = XmlRpcToBool(
+              image_xml["compression_enabled"], false);
+        }
+        image_zenoh_config_.listen_endpoints =
+            image_xml.hasMember("listen_endpoints")
+                ? XmlRpcToStringVector(image_xml["listen_endpoints"])
+                : std::vector<std::string>{};
+        image_zenoh_config_.connect_endpoints =
+            image_xml.hasMember("connect_endpoints")
+                ? XmlRpcToStringVector(image_xml["connect_endpoints"])
+                : std::vector<std::string>{};
+
+        const bool image_seed_from_ip =
+            image_xml.hasMember("seed_from_ip_table") &&
+            XmlRpcToBool(image_xml["seed_from_ip_table"], false);
+        const int image_seed_port = image_xml.hasMember("seed_port")
+                                        ? XmlRpcToInt(image_xml["seed_port"], 7448)
+                                        : 7448;
+        if (image_seed_from_ip) {
+          for (const auto& host : host_map_) {
+            if (host.first != my_hostname_ && !host.second.empty()) {
+              image_zenoh_config_.connect_endpoints.push_back(
+                  "udp/" + host.second + ":" +
+                  std::to_string(image_seed_port) +
+                  "?rel=1;mixed_rel=1;multistream=1");
+            }
+          }
+        }
+
+        zenoh_config_.allowed_link_protocols = {"tcp"};
+        image_zenoh_config_.allowed_link_protocols = {"udp"};
+        ValidateEndpointProtocols(zenoh_config_.listen_endpoints, "tcp",
+                                  "zenoh control session listen");
+        ValidateEndpointProtocols(zenoh_config_.connect_endpoints, "tcp",
+                                  "zenoh control session connect");
+        ValidateEndpointProtocols(image_zenoh_config_.listen_endpoints, "udp",
+                                  "zenoh image session listen");
+        ValidateEndpointProtocols(image_zenoh_config_.connect_endpoints, "udp",
+                                  "zenoh image session connect");
+        if (image_zenoh_config_.listen_endpoints.empty() &&
+            image_zenoh_config_.connect_endpoints.empty()) {
+          throw std::invalid_argument(
+              "zenoh.image_session requires at least one UDP listen or connect endpoint");
+        }
+      }
+    }
+
+    if (zenoh_xml.hasMember("cloud_session")) {
+      const XmlRpc::XmlRpcValue& cloud_xml = zenoh_xml["cloud_session"];
+      if (cloud_xml.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
+        throw std::invalid_argument("zenoh.cloud_session must be a struct");
+      }
+      cloud_session_enabled_ = cloud_xml.hasMember("enabled")
+                                   ? XmlRpcToBool(cloud_xml["enabled"], false)
+                                   : false;
+      if (cloud_session_enabled_) {
+        cloud_zenoh_config_ = zenoh_config_;
+        cloud_zenoh_config_.enable_liveliness = false;
+        cloud_zenoh_config_.service_worker_threads = 1U;
+        cloud_zenoh_config_.service_queue_capacity = 1U;
+        cloud_zenoh_config_.mode = cloud_xml.hasMember("mode")
+                                       ? XmlRpcToString(cloud_xml["mode"], zenoh_config_.mode)
+                                       : zenoh_config_.mode;
+        cloud_zenoh_config_.multicast_scouting =
+            cloud_xml.hasMember("multicast_scouting")
+                ? XmlRpcToBool(cloud_xml["multicast_scouting"],
+                               zenoh_config_.multicast_scouting)
+                : zenoh_config_.multicast_scouting;
+        cloud_zenoh_config_.gossip_scouting =
+            cloud_xml.hasMember("gossip_scouting")
+                ? XmlRpcToBool(cloud_xml["gossip_scouting"],
+                               zenoh_config_.gossip_scouting)
+                : zenoh_config_.gossip_scouting;
+        cloud_zenoh_config_.compression_enabled =
+            cloud_xml.hasMember("compression_enabled")
+                ? XmlRpcToBool(cloud_xml["compression_enabled"], false)
+                : false;
+        cloud_zenoh_config_.multicast_scouting_address =
+            cloud_xml.hasMember("multicast_address")
+                ? XmlRpcToString(cloud_xml["multicast_address"], "")
+                : std::string("224.0.0.225:7446");
+        cloud_zenoh_config_.listen_endpoints =
+            cloud_xml.hasMember("listen_endpoints")
+                ? XmlRpcToStringVector(cloud_xml["listen_endpoints"])
+                : std::vector<std::string>{};
+        cloud_zenoh_config_.connect_endpoints =
+            cloud_xml.hasMember("connect_endpoints")
+                ? XmlRpcToStringVector(cloud_xml["connect_endpoints"])
+                : std::vector<std::string>{};
+
+        const bool cloud_seed_from_ip =
+            cloud_xml.hasMember("seed_from_ip_table") &&
+            XmlRpcToBool(cloud_xml["seed_from_ip_table"], false);
+        const int cloud_seed_port = cloud_xml.hasMember("seed_port")
+                                        ? XmlRpcToInt(cloud_xml["seed_port"], 7449)
+                                        : 7449;
+        if (cloud_seed_from_ip) {
+          for (const auto& host : host_map_) {
+            if (host.first != my_hostname_ && !host.second.empty()) {
+              cloud_zenoh_config_.connect_endpoints.push_back(
+                  "tcp/" + host.second + ":" +
+                  std::to_string(cloud_seed_port));
+            }
+          }
+        }
+
+        zenoh_config_.allowed_link_protocols = {"tcp"};
+        cloud_zenoh_config_.allowed_link_protocols = {"tcp"};
+        ValidateEndpointProtocols(zenoh_config_.listen_endpoints, "tcp",
+                                  "zenoh control session listen");
+        ValidateEndpointProtocols(zenoh_config_.connect_endpoints, "tcp",
+                                  "zenoh control session connect");
+        ValidateEndpointProtocols(cloud_zenoh_config_.listen_endpoints, "tcp",
+                                  "zenoh cloud session listen");
+        ValidateEndpointProtocols(cloud_zenoh_config_.connect_endpoints, "tcp",
+                                  "zenoh cloud session connect");
+        if (cloud_zenoh_config_.listen_endpoints.empty() &&
+            cloud_zenoh_config_.connect_endpoints.empty()) {
+          throw std::invalid_argument(
+              "zenoh.cloud_session requires at least one TCP listen or connect endpoint");
+        }
+      }
+    }
   }
   if (zenoh_config_.mode != "peer" && zenoh_config_.mode != "client" &&
       zenoh_config_.mode != "router") {
@@ -233,6 +430,20 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
   }
   if (zenoh_config_.compression_enabled) {
     ROS_WARN("[Bridge] Zenoh generic compression is enabled; disable it for JPEG/Draco workloads");
+  }
+  if (image_session_enabled_ &&
+      image_zenoh_config_.mode != "peer" &&
+      image_zenoh_config_.mode != "client" &&
+      image_zenoh_config_.mode != "router") {
+    throw std::invalid_argument(
+        "zenoh.image_session.mode must be peer, client, or router");
+  }
+  if (cloud_session_enabled_ &&
+      cloud_zenoh_config_.mode != "peer" &&
+      cloud_zenoh_config_.mode != "client" &&
+      cloud_zenoh_config_.mode != "router") {
+    throw std::invalid_argument(
+        "zenoh.cloud_session.mode must be peer, client, or router");
   }
 
   if (!nh_->getParam("topics", topics_xml_)) {
@@ -365,8 +576,10 @@ void BridgeFactory::topicOperatorInit() {
     }
     topic.raw_name_ = nh_->resolveName(topic.name_);
     topic.src_hostname_ = my_hostname_;
+    topic.transport_name_ = TopicTransportName(
+        image_session_enabled_, cloud_session_enabled_, topic.type_);
     send_topics_[topic.name_] = std::make_shared<TopicFactory>(
-        topic, transport_, TopicFactory::SEND, nh_public_);
+        topic, transportForTopic(topic), TopicFactory::SEND, nh_public_);
   }
 
   for (const TopicCfg& configured : topic_cfgs_) {
@@ -399,11 +612,13 @@ void BridgeFactory::topicOperatorInit() {
         topic.name_ = "/bridge" + topic.name_;
       }
       topic.src_hostname_ = source.first;
+      topic.transport_name_ = TopicTransportName(
+          image_session_enabled_, cloud_session_enabled_, topic.type_);
       if (recv_topics_.find(topic.name_) != recv_topics_.end()) {
         throw std::invalid_argument("duplicate receive ROS topic: " + topic.name_);
       }
       recv_topics_[topic.name_] = std::make_shared<TopicFactory>(
-          topic, transport_, TopicFactory::RECV, nh_public_);
+          topic, transportForTopic(topic), TopicFactory::RECV, nh_public_);
       if (topic.dynamic_dst_) {
         break;
       }
@@ -412,6 +627,26 @@ void BridgeFactory::topicOperatorInit() {
   INFO_MSG_GREEN("[Bridge] send topics: " << send_topics_.size()
                                            << ", receive topics: "
                                            << recv_topics_.size());
+}
+
+std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport>
+BridgeFactory::transportForTopic(const TopicCfg& topic) const {
+  if (image_session_enabled_ && topic.type_ == "sensor_msgs/Image") {
+    if (image_transport_ == nullptr) {
+      throw std::runtime_error("image Zenoh session is not initialized");
+    }
+    return image_transport_;
+  }
+  if (cloud_session_enabled_ && topic.type_ == "sensor_msgs/PointCloud2") {
+    if (cloud_transport_ == nullptr) {
+      throw std::runtime_error("cloud Zenoh session is not initialized");
+    }
+    return cloud_transport_;
+  }
+  if (control_transport_ == nullptr) {
+    throw std::runtime_error("control Zenoh session is not initialized");
+  }
+  return control_transport_;
 }
 
 void BridgeFactory::getServiceConfigAndInit() {
@@ -461,10 +696,10 @@ void BridgeFactory::getServiceConfigAndInit() {
                                      : service_name;
     if (i_am_server) {
       service_servers_[service_name] = std::make_shared<ServiceFactory>(
-          ServiceFactory::SERVER, nh_public_, config, transport_);
+          ServiceFactory::SERVER, nh_public_, config, control_transport_);
     } else if (i_am_client) {
       service_clients_[service_name] = std::make_shared<ServiceFactory>(
-          ServiceFactory::CLIENT, nh_public_, config, transport_);
+          ServiceFactory::CLIENT, nh_public_, config, control_transport_);
     }
   }
 }
@@ -498,8 +733,14 @@ void BridgeFactory::stopBridge() {
   service_servers_.clear();
   recv_topics_.clear();
   send_topics_.clear();
-  if (transport_ != nullptr) {
-    transport_->Close();
+  if (image_transport_ != nullptr) {
+    image_transport_->Close();
+  }
+  if (cloud_transport_ != nullptr) {
+    cloud_transport_->Close();
+  }
+  if (control_transport_ != nullptr) {
+    control_transport_->Close();
   }
   INFO_MSG_RED("[Bridge] Zenoh bridge stopped cleanly");
 }
@@ -509,12 +750,26 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
   message.header.stamp = ros::Time::now();
   message.header.frame_id = my_hostname_;
 
-  const auto transport_stats = transport_ == nullptr
-                                   ? swarm_ros_bridge::transport::TransportStats{}
-                                   : transport_->GetStats();
-  const auto append_metrics = [&message, &transport_stats](
+  const auto control_stats =
+      control_transport_ == nullptr
+          ? swarm_ros_bridge::transport::TransportStats{}
+          : control_transport_->GetStats();
+  const auto image_stats =
+      image_transport_ == nullptr
+          ? swarm_ros_bridge::transport::TransportStats{}
+          : image_transport_->GetStats();
+  const auto cloud_stats =
+      cloud_transport_ == nullptr
+          ? swarm_ros_bridge::transport::TransportStats{}
+          : cloud_transport_->GetStats();
+  const auto append_metrics = [&message, &control_stats, &image_stats, &cloud_stats](
                                   const TopicFactory::Ptr& factory) {
     const auto metrics = factory->GetMetricsSnapshot();
+    const auto& transport_stats =
+        metrics.transport == "zenoh-udp"
+            ? image_stats
+            : (metrics.transport == "zenoh-cloud-tcp" ? cloud_stats
+                                                        : control_stats);
     swarm_ros_bridge::NetworkInfo info;
     info.name = metrics.topic_name;
     info.msg_type = metrics.msg_type;
@@ -526,6 +781,12 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
     info.send_rate_hz = static_cast<float>(metrics.send_rate_hz);
     info.recv_rate_hz = static_cast<float>(metrics.recv_rate_hz);
     info.bandwidth_kbps = static_cast<float>(metrics.bandwidth_kbps);
+    info.effective_recv_bandwidth_kbps =
+        static_cast<float>(metrics.effective_recv_bandwidth_kbps);
+    info.image_loss_rate_pct =
+        static_cast<float>(metrics.image_loss_rate_pct);
+    info.complete_frame_success_rate_pct =
+        static_cast<float>(metrics.complete_frame_success_rate_pct);
     info.avg_latency_ms = static_cast<float>(metrics.avg_latency_ms);
     info.jitter_ms = static_cast<float>(metrics.jitter_ms);
     info.stability_score = static_cast<float>(metrics.stability_score);
@@ -538,6 +799,11 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
     info.total_messages = static_cast<std::uint32_t>(metrics.total_messages);
     info.dropped_messages = static_cast<std::uint32_t>(metrics.dropped_messages);
     info.transport_queue_drops = metrics.transport_queue_drops;
+    info.expected_frames = metrics.expected_frames;
+    info.transport_complete_frames = metrics.transport_complete_frames;
+    info.decoded_frames = metrics.decoded_frames;
+    info.inferred_lost_frames = metrics.inferred_lost_frames;
+    info.sequence_resets = metrics.sequence_resets;
     info.session_connected = transport_stats.session_open;
     info.link_connected = transport_stats.link_connected;
     info.connected_peer_count = transport_stats.connected_peer_count;
@@ -551,15 +817,19 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
     append_metrics(receiver.second);
   }
 
-  if (transport_ != nullptr) {
-    const auto& stats = transport_stats;
+  const auto append_session = [&message](
+                                  const std::string& name,
+                                  const std::string& direction,
+                                  const std::string& transport_name,
+                                  const swarm_ros_bridge::transport::TransportStats& stats) {
     swarm_ros_bridge::NetworkInfo session;
-    session.name = "@zenoh/session";
+    session.name = name;
     session.msg_type = "transport";
-    session.direction = "shared";
+    session.direction = direction;
     session.codec = "none";
-    session.transport = "zenoh";
-    session.qos_class = "service";
+    session.transport = transport_name;
+    session.qos_class =
+        direction == "image" || direction == "cloud" ? "bulk" : "service";
     session.session_connected = stats.session_open;
     session.link_connected = stats.link_connected;
     session.connected_peer_count = stats.connected_peer_count;
@@ -570,8 +840,26 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
     session.service_timeouts = stats.service_timeouts;
     session.decode_errors = stats.receive_decode_errors;
     message.info.push_back(std::move(session));
+  };
 
-    for (const auto& node : transport_->GetNodePresence()) {
+  if (control_transport_ != nullptr) {
+    append_session("@zenoh/session/control", "control",
+                   image_session_enabled_ || cloud_session_enabled_
+                       ? "zenoh-tcp"
+                       : "zenoh",
+                   control_stats);
+  }
+  if (image_transport_ != nullptr) {
+    append_session("@zenoh/session/image", "image", "zenoh-udp",
+                   image_stats);
+  }
+  if (cloud_transport_ != nullptr) {
+    append_session("@zenoh/session/cloud", "cloud", "zenoh-cloud-tcp",
+                   cloud_stats);
+  }
+
+  if (control_transport_ != nullptr) {
+    for (const auto& node : control_transport_->GetNodePresence()) {
       swarm_ros_bridge::NetworkInfo presence;
       presence.name = "@zenoh/node/" + node.hostname;
       presence.msg_type = "presence";
@@ -582,8 +870,8 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
       presence.node_online = node.online;
       presence.node_state_age_ms = node.state_age_ms;
       presence.node_online_transitions = node.online_transitions;
-      presence.session_connected = stats.session_open;
-      presence.link_connected = stats.link_connected;
+      presence.session_connected = control_stats.session_open;
+      presence.link_connected = control_stats.link_connected;
       message.info.push_back(std::move(presence));
     }
   }

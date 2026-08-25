@@ -15,6 +15,27 @@ zenoh:
   service_timeout_ms: 1000
   service_worker_threads: 2
   service_queue_capacity: 64
+  image_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    compression_enabled: false
+    listen_endpoints:
+      - "udp/0.0.0.0:0?rel=1;mixed_rel=1;multistream=1"
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7448
+  cloud_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    multicast_address: "224.0.0.225:7446"
+    compression_enabled: false
+    listen_endpoints:
+      - "tcp/0.0.0.0:0"
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7449
 
 services:
   # --------- Services ---------- #

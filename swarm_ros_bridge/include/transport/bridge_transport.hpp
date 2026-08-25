@@ -63,8 +63,11 @@ struct ZenohTransportConfig {
   bool multicast_scouting{true};
   bool gossip_scouting{true};
   bool compression_enabled{false};
+  bool enable_liveliness{true};
+  std::string multicast_scouting_address;
   std::vector<std::string> listen_endpoints;
   std::vector<std::string> connect_endpoints;
+  std::vector<std::string> allowed_link_protocols;
   std::uint64_t service_timeout_ms{1000};
   std::size_t service_worker_threads{2};
   std::size_t service_queue_capacity{64};

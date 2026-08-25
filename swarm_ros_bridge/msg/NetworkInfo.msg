@@ -8,6 +8,9 @@ float32 configured_rate_hz
 float32 send_rate_hz
 float32 recv_rate_hz
 float32 bandwidth_kbps
+float32 effective_recv_bandwidth_kbps
+float32 image_loss_rate_pct
+float32 complete_frame_success_rate_pct
 float32 avg_latency_ms
 float32 jitter_ms
 float32 stability_score
@@ -25,6 +28,11 @@ uint64 connected_peer_count
 uint64 connected_router_count
 uint64 reconnect_count
 uint64 transport_queue_drops
+uint64 expected_frames
+uint64 transport_complete_frames
+uint64 decoded_frames
+uint64 inferred_lost_frames
+uint64 sequence_resets
 uint64 service_timeouts
 uint64 decode_errors
 string node_hostname

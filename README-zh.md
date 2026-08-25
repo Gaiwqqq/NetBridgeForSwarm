@@ -1,11 +1,12 @@
 # NetBridgeForSwarm（Zenoh 1.9） [English](README.md)
 
-NetBridgeForSwarm 是面向 ROS1 Noetic 多机系统的通信 bridge。当前版本使用一个进程级共享 Zenoh session 统一承载 topic、图像、点云与 service，同时保留 ROS 序列化、JPEG 自适应质量、Draco/PCL 点云压缩、前缀规则及 `to_drone_ids` 定向路由。
+NetBridgeForSwarm 是面向 ROS1 Noetic 多机系统的通信 bridge。当前版本使用三 Zenoh session：图像通过专用 UDP session，PointCloud2 通过专用 TCP session，其余 topic、service 与节点存活通过 TCP 控制 session，同时保留 ROS 序列化、JPEG 自适应质量、Draco/PCL 点云压缩、前缀规则及 `to_drone_ids` 定向路由。
 
 主要变化：
 
 - 移除 ZeroMQ、每 topic 独立端口和自研 UDP 图像分片运行时依赖。
 - topic 使用 Zenoh pub/sub，service 使用 query/reply。
+- 控制、图像和点云分别使用 TCP、UDP、TCP session；点云 session 使用独立 scouting 组，图像/点云 session 不发布重复的 liveliness token。
 - 使用版本化 `NBZ1` envelope，携带来源、序号、源时间、ROS type/MD5、header 与 payload 类型。
 - Zenoh 回调只写入有界队列；ROS 解码和发布由可停止、可 join 的 worker 执行。
 - `state`/`bulk` 队列丢旧保新，避免图像或点云积压；`command`/service 使用阻塞拥塞策略。
@@ -84,9 +85,32 @@ zenoh:
   service_timeout_ms: 1000
   service_worker_threads: 2
   service_queue_capacity: 64
+  image_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    compression_enabled: false
+    listen_endpoints:
+      - "udp/0.0.0.0:0?rel=1;mixed_rel=1;multistream=1"
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7448
+  cloud_session:
+    enabled: true
+    multicast_scouting: true
+    gossip_scouting: true
+    multicast_address: "224.0.0.225:7446"
+    compression_enabled: false
+    listen_endpoints:
+      - "tcp/0.0.0.0:0"
+    connect_endpoints: []
+    seed_from_ip_table: false
+    seed_port: 7449
 ```
 
-组播被机载网络过滤时，在 `connect_endpoints` 中加入一个或多个静态 peer，例如 `tcp/192.168.123.6:7447`。TCP 与 QUIC 的对照配置见 [`zenoh_quic_example.yaml`](swarm_ros_bridge/config/zenoh_quic_example.yaml)。QUIC mixed reliability 只有在本项目构建脚本启用的 unstable reliability API 下才会把 `Reliable` 与 `BestEffort` 分别映射到 stream/datagram；官方配置语法见 [Zenoh QUIC 文档](https://zenoh.io/docs/manual/quic/)。
+根级 endpoint 属于 TCP 控制 session，`image_session` 属于 UDP 图像 session，`cloud_session` 属于 PointCloud2 专用 TCP session。图像和点云 topic 必须继续使用 `qos_class: bulk`。JPEG 分片和重组由 Zenoh 完成；`rel=1;mixed_rel=1` 为 UDP link 同时保留可靠与 BestEffort 通道，`multistream=1` 按优先级拆分流。点云使用不同的 `multicast_address`，用于隔离同为 TCP 的控制与点云自动发现域。
+
+组播被机载网络过滤时，三组 `connect_endpoints` 都必须配置，例如控制、图像、点云分别使用端口 7447、7448、7449。固定端口示例见 [`zenoh_three_session_example.yaml`](swarm_ros_bridge/config/zenoh_three_session_example.yaml)。UDP endpoint 未加密，只应部署在可信、隔离的机群网络中。
 
 每条 topic 必须提供 `qos_class`：
 
@@ -135,7 +159,9 @@ services:
 - service：`netbridge/v1/service/<server>/<ros-service>`
 - liveliness：`netbridge/v1/alive/<hostname>`
 
-`/swarm_bridge/diagnostics` 现在包含 transport、QoS、session/link 状态、peer/router 数、估算重连次数、接收队列丢弃、service 超时、envelope 解码错误，以及每个 Zenoh 节点的 liveliness 状态。
+`/swarm_bridge/diagnostics` 分别发布 `@zenoh/session/control`、`@zenoh/session/image` 和 `@zenoh/session/cloud`，并包含 transport、QoS、session/link 状态、peer/router 数、估算重连次数、接收队列丢弃、service 超时、envelope 解码错误，以及 TCP 控制 session 上的节点 liveliness 状态。
+
+图像接收项还提供 `image_loss_rate_pct`、`complete_frame_success_rate_pct` 和 `effective_recv_bandwidth_kbps`。丢失率根据 bridge envelope 连续序号的缺口计算，表示接收端观察到的端到端完整帧丢失，并非底层 UDP 数据报丢包率；完整帧成功率为成功 JPEG 解码并发布的帧数除以期望帧数；有效接收带宽是最近 3 秒成功解码发布的 JPEG payload 带宽。`expected_frames`、`transport_complete_frames`、`decoded_frames` 与 `inferred_lost_frames` 可用于进一步定位网络丢失、队列替换或解码失败。TUI 的图像 Inspector 会直接显示这些值。
 
 `bridge_tui` 的 Overview 页面会显示在线节点数；Nodes 页面会把配置中的节点和 Zenoh 动态发现的节点合并展示：`ONLINE` 表示当前持有 liveliness token，`OFFLINE` 表示曾经在线但 token 已消失，`UNKNOWN` 表示本机 bridge 启动后尚未观察到该节点，或本机诊断已超过 2.5 s 未更新。页面右上角同时显示诊断流为 `LIVE`、`STALE` 或 `WAIT`，避免把缓存中的旧状态误认为在线。节点详情还会显示当前状态持续时间和上线次数。TUI 每 500 ms 刷新，bridge 每 1 s 发布一次诊断；Zenoh 已产生 liveliness 事件后，TUI 通常会在约 1–2 s 内更新，非正常断网的发现时间还取决于 Zenoh transport 的失联检测时间。
 
@@ -148,10 +174,20 @@ TUI 会在运行时根据终端尺寸自动重排：窄屏使用顶部导航和�
 ```bash
 ./devel/lib/swarm_ros_bridge/test_bridge_transport
 ./devel/lib/swarm_ros_bridge/test_zenoh_transport_smoke
+./devel/lib/swarm_ros_bridge/test_zenoh_three_session_smoke
+./devel/lib/swarm_ros_bridge/test_topic_metrics
 ./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-第二项会在 loopback 上建立两个真实 Zenoh peer，验证 pub/sub、query/reply，以及节点上线和离线事件。完整实机验收、TCP/QUIC 交替测试、回滚门槛与记录表见 [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md)。
+第二项验证常规 pub/sub、query/reply 和节点上下线；第三项建立互相隔离的控制 TCP、图像 UDP、点云 TCP 链路，并验证三种 payload 不会串入错误 session。图像指标测试覆盖序号缺口、重复帧、发送端重启和有效带宽计算。
+
+可重复执行三节点端到端测试（会启动三个隔离 ROS Master）：
+
+```bash
+./swarm_ros_bridge/scripts/three_node_transport_test.sh
+```
+
+该测试模拟 `drone1 + drone2 + groundStation0`，覆盖 Odometry/Image/Draco PointCloud2 的多对一与一对多，并检查图像 header、接收指标和 cloud TCP session 诊断。完整实机验收、回滚门槛与记录表见 [`ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md)。
 
 启动方式保持不变，例如：
 

@@ -1,5 +1,7 @@
 #include "diagnostics/topic_metrics.hpp"
 
+#include <algorithm>
+
 namespace swarm_ros_bridge {
 namespace diagnostics {
 
@@ -34,6 +36,36 @@ double ComputeStability(const TopicRuntimeState& state,
 }
 
 }  // namespace
+
+void ObserveCompleteFrameSequence(std::uint64_t sequence,
+                                  TopicRuntimeState* state) {
+  if (state == nullptr) {
+    return;
+  }
+  if (!state->frame_sequence_initialized) {
+    state->frame_sequence_initialized = true;
+    state->last_frame_sequence = sequence;
+    state->expected_frames++;
+    state->transport_complete_frames++;
+    return;
+  }
+  if (sequence == state->last_frame_sequence) {
+    return;
+  }
+  if (sequence < state->last_frame_sequence) {
+    state->sequence_resets++;
+    state->last_frame_sequence = sequence;
+    state->expected_frames++;
+    state->transport_complete_frames++;
+    return;
+  }
+
+  const std::uint64_t sequence_delta = sequence - state->last_frame_sequence;
+  state->expected_frames += sequence_delta;
+  state->inferred_lost_frames += sequence_delta - 1U;
+  state->transport_complete_frames++;
+  state->last_frame_sequence = sequence;
+}
 
 TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& now) {
   TopicMetrics metrics;
@@ -77,6 +109,7 @@ TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& n
     metrics.bandwidth_kbps = recent_bytes == 0
                                  ? 0.0
                                  : static_cast<double>(recent_bytes) * 8.0 / 1000.0 / recv_elapsed;
+    metrics.effective_recv_bandwidth_kbps = metrics.bandwidth_kbps;
   }
   metrics.avg_latency_ms = state.avg_latency_ms;
   metrics.jitter_ms = state.jitter_ms;
@@ -88,6 +121,20 @@ TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& n
   metrics.total_messages = state.total_sent + state.total_received;
   metrics.dropped_messages = state.dropped_messages;
   metrics.transport_queue_drops = state.transport_queue_drops;
+  metrics.expected_frames = state.expected_frames;
+  metrics.transport_complete_frames = state.transport_complete_frames;
+  metrics.decoded_frames = state.direction == "recv" ? state.total_received : 0U;
+  metrics.inferred_lost_frames = state.inferred_lost_frames;
+  metrics.sequence_resets = state.sequence_resets;
+  if (state.msg_type == "sensor_msgs/Image" &&
+      state.direction == "recv" && state.expected_frames > 0U) {
+    metrics.image_loss_rate_pct =
+        std::min(100.0, static_cast<double>(state.inferred_lost_frames) * 100.0 /
+                            static_cast<double>(state.expected_frames));
+    metrics.complete_frame_success_rate_pct =
+        std::min(100.0, static_cast<double>(state.total_received) * 100.0 /
+                            static_cast<double>(state.expected_frames));
+  }
   metrics.last_recv_age_ms =
       state.last_recv_time.isZero() ? -1.0 : (now - state.last_recv_time).toSec() * 1000.0;
   metrics.stability_score = ComputeStability(state, metrics.send_rate_hz, metrics.recv_rate_hz);

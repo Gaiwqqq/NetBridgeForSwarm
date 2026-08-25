@@ -173,6 +173,10 @@ bool ConfigLoader::LoadFromRosParams(const ros::NodeHandle& nh, BridgeConfig* co
         zenoh_xml, "gossip_scouting", config->zenoh.gossip_scouting);
     config->zenoh.compression_enabled = GetBoolMember(
         zenoh_xml, "compression_enabled", config->zenoh.compression_enabled);
+    if (zenoh_xml.hasMember("multicast_address")) {
+      config->zenoh.multicast_address =
+          GetString(zenoh_xml["multicast_address"]);
+    }
     if (zenoh_xml.hasMember("listen_endpoints")) {
       LoadHosts(zenoh_xml["listen_endpoints"], &config->zenoh.listen_endpoints);
     }
@@ -181,6 +185,40 @@ bool ConfigLoader::LoadFromRosParams(const ros::NodeHandle& nh, BridgeConfig* co
     }
     config->zenoh.service_timeout_ms = GetIntMember(
         zenoh_xml, "service_timeout_ms", config->zenoh.service_timeout_ms);
+    if (zenoh_xml.hasMember("image_session") &&
+        zenoh_xml["image_session"].getType() ==
+            XmlRpc::XmlRpcValue::TypeStruct) {
+      const auto& image_xml = zenoh_xml["image_session"];
+      config->zenoh.image_session.enabled = GetBoolMember(
+          image_xml, "enabled", config->zenoh.image_session.enabled);
+      if (image_xml.hasMember("listen_endpoints")) {
+        LoadHosts(image_xml["listen_endpoints"],
+                  &config->zenoh.image_session.listen_endpoints);
+      }
+      if (image_xml.hasMember("connect_endpoints")) {
+        LoadHosts(image_xml["connect_endpoints"],
+                  &config->zenoh.image_session.connect_endpoints);
+      }
+    }
+    if (zenoh_xml.hasMember("cloud_session") &&
+        zenoh_xml["cloud_session"].getType() ==
+            XmlRpc::XmlRpcValue::TypeStruct) {
+      const auto& cloud_xml = zenoh_xml["cloud_session"];
+      config->zenoh.cloud_session.enabled = GetBoolMember(
+          cloud_xml, "enabled", config->zenoh.cloud_session.enabled);
+      if (cloud_xml.hasMember("multicast_address")) {
+        config->zenoh.cloud_session.multicast_address =
+            GetString(cloud_xml["multicast_address"]);
+      }
+      if (cloud_xml.hasMember("listen_endpoints")) {
+        LoadHosts(cloud_xml["listen_endpoints"],
+                  &config->zenoh.cloud_session.listen_endpoints);
+      }
+      if (cloud_xml.hasMember("connect_endpoints")) {
+        LoadHosts(cloud_xml["connect_endpoints"],
+                  &config->zenoh.cloud_session.connect_endpoints);
+      }
+    }
   }
 
   XmlRpc::XmlRpcValue topics_xml;

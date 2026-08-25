@@ -79,6 +79,7 @@ catkin_package(
 
 catkin_install_python(PROGRAMS
   scripts/bridge_test_publisher.py
+  scripts/three_node_transport_test.sh
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -214,6 +215,26 @@ target_link_libraries(test_zenoh_transport_smoke
     zenohcxx::zenohc
 )
 add_test(NAME zenoh_transport_smoke COMMAND test_zenoh_transport_smoke)
+
+add_executable(test_zenoh_three_session_smoke
+    test/zenoh_three_session_smoke_test.cpp
+    src/transport/bridge_transport.cpp
+    src/transport/zenoh_transport.cpp
+)
+target_include_directories(test_zenoh_three_session_smoke PRIVATE include)
+target_link_libraries(test_zenoh_three_session_smoke
+    pthread
+    zenohcxx::zenohc
+)
+add_test(NAME zenoh_three_session_smoke COMMAND test_zenoh_three_session_smoke)
+
+add_executable(test_topic_metrics
+    test/topic_metrics_test.cpp
+    src/diagnostics/topic_metrics.cpp
+)
+target_include_directories(test_topic_metrics PRIVATE include)
+target_link_libraries(test_topic_metrics ${catkin_LIBRARIES})
+add_test(NAME image_receive_metrics COMMAND test_topic_metrics)
 
 add_executable(test_tui_layout
     test/tui_layout_test.cpp

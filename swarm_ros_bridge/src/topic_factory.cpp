@@ -76,7 +76,7 @@ TopicFactory::TopicFactory(
   metrics_state_.codec = topic_cfg_.type_ == "sensor_msgs/PointCloud2"
                              ? (topic_cfg_.cloud_compress_ ? topic_cfg_.cloud_codec_ : "raw")
                              : (topic_cfg_.type_ == "sensor_msgs/Image" ? "jpeg" : "raw");
-  metrics_state_.transport = "zenoh";
+  metrics_state_.transport = topic_cfg_.transport_name_;
   metrics_state_.qos_class =
       swarm_ros_bridge::transport::QosClassName(topic_cfg_.qos_class_);
   metrics_state_.configured_rate_hz = topic_cfg_.max_freq_;
@@ -95,7 +95,8 @@ TopicFactory::TopicFactory(
       const std::string key = swarm_ros_bridge::transport::TopicFanoutKey(
           topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
       sender_ = transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
-      INFO_MSG(" SEND ZENOH | " << key << " | " << topic_cfg_.max_freq_ << "Hz");
+      INFO_MSG(" SEND " << topic_cfg_.transport_name_ << " | " << key
+                         << " | " << topic_cfg_.max_freq_ << "Hz");
     } else {
       for (const auto& destination : topic_cfg_.dst_hostname_map_) {
         if (!destination.second || destination.first == topic_cfg_.my_hostname_) {
@@ -106,8 +107,9 @@ TopicFactory::TopicFactory(
         dynamic_senders_[destination.first] =
             transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
       }
-      INFO_MSG(" SEND ZENOH DYNAMIC | " << topic_cfg_.wire_name_ << " | "
-                                         << topic_cfg_.max_freq_ << "Hz");
+      INFO_MSG(" SEND " << topic_cfg_.transport_name_ << " DYNAMIC | "
+                         << topic_cfg_.wire_name_ << " | "
+                         << topic_cfg_.max_freq_ << "Hz");
     }
     sub_last_time_ = ros::Time(0);
     sub_ = topicSubscriber(topic_cfg_.name_, topic_cfg_.type_, nh_public);
@@ -463,6 +465,10 @@ void TopicFactory::enqueueEnvelope(
     return;
   }
 
+  if (topic_cfg_.type_ == "sensor_msgs/Image") {
+    recordCompleteImageEnvelope(envelope.sequence);
+  }
+
   {
     std::lock_guard<std::mutex> lock(recv_mutex_);
     if (!recv_thread_flag_.load()) {
@@ -542,6 +548,12 @@ void TopicFactory::recordTransportQueueDrop() {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   metrics_state_.dropped_messages++;
   metrics_state_.transport_queue_drops++;
+}
+
+void TopicFactory::recordCompleteImageEnvelope(std::uint64_t sequence) {
+  std::lock_guard<std::mutex> lock(metrics_mutex_);
+  swarm_ros_bridge::diagnostics::ObserveCompleteFrameSequence(
+      sequence, &metrics_state_);
 }
 
 void TopicFactory::recordReceive(std::size_t bytes, double latency_ms) {
@@ -658,7 +670,8 @@ void TopicFactory::createThread() {
         key, [this](swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
           enqueueEnvelope(std::move(envelope));
         });
-    INFO_MSG(" RECV ZENOH | " << key << " -> " << topic_cfg_.name_);
+    INFO_MSG(" RECV " << topic_cfg_.transport_name_ << " | " << key
+                       << " -> " << topic_cfg_.name_);
   } catch (...) {
     recv_thread_flag_.store(false);
     recv_condition_.notify_all();

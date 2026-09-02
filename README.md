@@ -160,7 +160,7 @@ Clients call `/drone1/add_two_ints`. The server rejects requests whose envelope 
 
 `/swarm_bridge/diagnostics` reports separate control, image, and cloud session rows. Image receiver rows include sequence-gap loss, complete-frame success, and the rolling three-second effective decoded JPEG bandwidth. These are end-to-end bridge-frame metrics, not raw UDP datagram loss. Liveliness remains on the control session only.
 
-The TUI reflows at runtime: narrow terminals use top navigation and compact lists, medium terminals stack list/detail panels, and wide terminals use a sidebar with side-by-side inspectors. Resize the terminal without restarting. The validated minimum is `40x12`; `80x24` or larger is recommended for routine use.
+The TUI uses a consistent opencode-inspired dark theme with blue accents and a top tab bar at every terminal width. Narrow terminals use compact summaries, while medium and wide terminals expose side-by-side inspectors. The Overview includes transport-session health, aggregate bandwidth history, and actionable alerts; Topics shows live rate, bandwidth, drops, and stability directly in the matrix. Logs subscribes to local `/rosout` and keeps the latest 500 records. Use `1`-`4` to switch tabs, `f` to cycle log filters, `?` for help, and `q` twice to confirm exit. Resize the terminal without restarting. The validated minimum is `40x12`; `80x24` or larger is recommended for routine use.
 
 ## Tests and deployment
 

@@ -1,6 +1,7 @@
 #include "tui/hosts_screen.hpp"
 
-#include "tui/screen_common.hpp"
+#include "tui/format.hpp"
+#include "tui/theme.hpp"
 
 #include <ftxui/dom/elements.hpp>
 
@@ -12,27 +13,37 @@
 namespace swarm_ros_bridge {
 namespace tui {
 
-namespace {
-
-std::string FormatAge(std::uint64_t milliseconds) {
-  const std::uint64_t seconds = milliseconds / 1000U;
-  if (seconds < 1U) {
-    return "<1s";
-  }
-  if (seconds < 60U) {
-    return std::to_string(seconds) + "s";
-  }
-  const std::uint64_t minutes = seconds / 60U;
-  if (minutes < 60U) {
-    return std::to_string(minutes) + "m " +
-           std::to_string(seconds % 60U) + "s";
-  }
-  const std::uint64_t hours = minutes / 60U;
-  return std::to_string(hours) + "h " +
-         std::to_string(minutes % 60U) + "m";
+ftxui::Element HostRowElement(
+    const std::string& hostname,
+    const swarm_ros_bridge::NetworkInfo* presence,
+    bool selected,
+    bool focused,
+    int name_width) {
+  using namespace ftxui;
+  const bool known = presence != nullptr;
+  const bool online = known && presence->node_online;
+  const auto state_color =
+      !known ? theme::TextDim()
+             : (online ? theme::Success() : theme::Error());
+  const std::string dot = !known ? "? " : (online ? "● " : "○ ");
+  const std::string cursor = selected ? "▸ " : (focused ? "› " : "  ");
+  const auto name_color = selected
+                              ? theme::Text()
+                              : (focused ? theme::PrimarySoft()
+                                         : theme::TextMuted());
+  auto row = hbox({
+      text(cursor) | color(focused ? theme::Primary() : theme::TextDim()),
+      text(dot) | color(state_color),
+      text(MiddleEllipsis(hostname,
+                          static_cast<std::size_t>(std::max(8, name_width)))) |
+          color(name_color),
+      filler(),
+      text(known ? FormatAge(presence->node_state_age_ms) : "") |
+          color(theme::TextDim()),
+      text(" "),
+  });
+  return selected ? row | bgcolor(theme::BackgroundSelected()) : row;
 }
-
-}  // namespace
 
 ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
                                  const ViewState& state,
@@ -62,42 +73,34 @@ ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
     }
   }
 
-  Element summary;
-  if (layout.compact()) {
-    summary = hbox({
-        text(" UP " + std::to_string(online_count) + " ") | bold |
-            color(Color::Black) | bgcolor(Color::GreenLight),
-        text(" DOWN " + std::to_string(offline_count) + " ") | bold |
-            color(Color::White) | bgcolor(Color::Red),
-        text(" ? " + std::to_string(unknown_count) + " ") |
-            color(Color::GrayLight),
-        filler(),
-        text(diagnostics_fresh ? " LIVE "
-                               : (has_diagnostics ? " STALE " : " WAIT ")) |
-            bold |
-            color(diagnostics_fresh ? Color::GreenLight : Color::YellowLight),
-    });
-  } else {
-    summary = hbox({
-        text(" ONLINE " + std::to_string(online_count) + " ") | bold |
-            color(Color::Black) | bgcolor(Color::GreenLight),
-        text("  OFFLINE " + std::to_string(offline_count) + " ") | bold |
-            color(Color::White) | bgcolor(Color::Red),
-        text("  UNKNOWN " + std::to_string(unknown_count) + " ") |
-            color(Color::GrayLight),
-        filler(),
-        text(diagnostics_fresh
-                 ? " DIAGNOSTICS LIVE "
-                 : (has_diagnostics ? " DIAGNOSTICS STALE "
-                                    : " DIAGNOSTICS WAIT ")) |
-            bold |
-            color(diagnostics_fresh ? Color::GreenLight : Color::YellowLight),
-    });
-  }
+  const std::string diag_label =
+      diagnostics_fresh ? "LIVE" : (has_diagnostics ? "STALE" : "WAIT");
+  const auto diag_color =
+      diagnostics_fresh ? theme::Success() : theme::Warning();
+  const int detail_width =
+      layout.compact()
+          ? layout.content_width
+          : (layout.wide()
+                 ? std::min(48, std::max(40, layout.content_width / 3))
+                 : std::max(34, layout.content_width / 2));
+  const int detail_body_width = std::max(
+      20, detail_width - (layout.compact() && layout.short_height ? 0 : 2));
+
+  auto summary = hbox({
+      text(" ● " + std::to_string(online_count) + " up ") | bold |
+          color(theme::Success()),
+      text("  ● " + std::to_string(offline_count) + " down ") | bold |
+          color(theme::Error()),
+      text("  ? " + std::to_string(unknown_count) + " ") |
+          color(theme::TextMuted()),
+      filler(),
+      text("diagnostics ") | color(theme::TextMuted()),
+      text(diag_label) | bold | color(diag_color),
+      text(" "),
+  });
 
   Element detail = text("No configured or discovered nodes.") |
-                   color(Color::GrayLight);
-  Element compact_detail = detail;
+                   color(theme::TextDim());
   Element short_detail = detail;
   if (!host_entries.empty()) {
     const std::string& hostname =
@@ -107,9 +110,11 @@ ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
     const bool known = diagnostics_cache != nullptr &&
                        diagnostics_cache->LookupNode(hostname, &presence);
     const bool online = known && presence.node_online;
-    const std::string status = !known ? "UNKNOWN" : (online ? "ONLINE" : "OFFLINE");
-    const auto status_color = !known ? Color::GrayLight
-                                     : (online ? Color::GreenLight : Color::RedLight);
+    const std::string status =
+        !known ? "UNKNOWN" : (online ? "ONLINE" : "OFFLINE");
+    const auto status_color =
+        !known ? theme::TextMuted()
+               : (online ? theme::Success() : theme::Error());
     const auto configured = config.ip_map.find(hostname);
     const bool is_configured = configured != config.ip_map.end();
     const std::string address =
@@ -117,69 +122,69 @@ ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
             ? "Zenoh discovery"
             : configured->second;
 
-    std::vector<Element> rows{
-        text(hostname) | bold | color(Color::White),
-        text(" " + status + " ") | bold | color(Color::Black) |
-            bgcolor(status_color),
-        separator(),
-        text("Role        " +
-             std::string(hostname == config.hostname ? "Current node"
-                                                      : "Peer node")),
-        text("Scope       " +
-             std::string(hostname.find("drone") == 0 ? "Drone"
-                                                      : "Ground / custom")),
-        text("Configured  " + std::string(is_configured ? "yes" : "no")),
-        text("Address     " + address),
-        text("Discovery   Zenoh liveliness token"),
-    };
-    if (known) {
-      rows.push_back(text(std::string(online ? "Online for  " : "Offline for ") +
-                          FormatAge(presence.node_state_age_ms)));
-      rows.push_back(text("Online count " +
-                          std::to_string(presence.node_online_transitions)));
-    } else {
+    std::vector<Element> rows;
+    if (detail_body_width <= 38) {
+      rows.push_back(text(hostname) | bold | color(theme::Text()));
       rows.push_back(
-          text(has_diagnostics && !diagnostics_fresh
-                   ? "Last event   local diagnostics stale"
-                   : "Last event   not observed") |
-          color(Color::YellowLight));
+          FieldRow("Status", status, status_color, detail_body_width));
+    } else {
+      rows.push_back(hbox({
+          text(hostname) | bold | color(theme::Text()) | flex,
+          Badge(status, status_color),
+      }));
     }
-    detail = vbox({
-                 vbox(std::move(rows)),
-                 separator(),
-                 text(known
-                          ? "State comes from live Zenoh PUT/DELETE events."
+    rows.push_back(separatorStyled(BorderStyle::LIGHT) |
+                   color(theme::BorderSubtle()));
+    rows.push_back(FieldRow(
+        "Role", hostname == config.hostname ? "Current node" : "Peer node",
+        theme::Text(), detail_body_width));
+    rows.push_back(FieldRow(
+        "Scope", hostname.rfind("drone", 0) == 0 ? "Drone" : "Ground / custom",
+        theme::Text(), detail_body_width));
+    rows.push_back(FieldRow("Configured", is_configured ? "yes" : "no",
+                            is_configured ? theme::Text() : theme::TextMuted(),
+                            detail_body_width));
+    rows.push_back(
+        FieldRow("Address", address, theme::Text(), detail_body_width));
+    rows.push_back(FieldRow("Discovery", "Zenoh liveliness token",
+                            theme::TextMuted(), detail_body_width));
+    if (known) {
+      rows.push_back(FieldRow(
+          online ? "Online for" : "Offline for",
+          FormatAge(presence.node_state_age_ms), theme::Text(),
+          detail_body_width));
+      rows.push_back(FieldRow(
+          "Online count",
+          std::to_string(presence.node_online_transitions), theme::Text(),
+          detail_body_width));
+    } else {
+      rows.push_back(FieldRow(
+          "Last event",
+          has_diagnostics && !diagnostics_fresh
+              ? "local diagnostics stale"
+              : "not observed",
+          theme::Warning(), detail_body_width));
+    }
+    rows.push_back(separatorStyled(BorderStyle::LIGHT) |
+                   color(theme::BorderSubtle()));
+    rows.push_back(
+        WrappedText(known ? "State comes from live Zenoh PUT/DELETE events."
                           : (has_diagnostics && !diagnostics_fresh
                                  ? "Local bridge diagnostics are older than 2.5s."
-                                 : "Waiting for the node's first liveliness event.")) |
-                     dim | color(Color::GrayDark),
-             }) |
-             color(Color::GrayLight);
-    compact_detail = vbox({
-        paragraph(hostname) | bold | color(Color::White),
-        hbox({
-            text(" " + status + " ") | bold | color(Color::Black) |
-                bgcolor(status_color),
-            text("  "),
-            text(hostname == config.hostname ? "current" : "peer") |
-                color(Color::GrayLight),
-            filler(),
-            text(known
-                     ? FormatAge(presence.node_state_age_ms)
-                     : (has_diagnostics && !diagnostics_fresh ? "stale"
-                                                              : "not seen")) |
-                color(known ? Color::White : Color::YellowLight),
-        }),
-    });
+                                 : "Waiting for the node's first liveliness event."),
+                    detail_body_width) |
+        dim | color(theme::TextDim()) | flex);
+    detail = vbox(std::move(rows));
+
     short_detail = hbox({
-        text(" " + hostname) | bold | color(Color::White),
+        text(" " + EndEllipsis(hostname, std::max(8, layout.content_width - 32))) |
+            bold | color(theme::Text()),
         filler(),
         text(status + " ") | bold | color(status_color),
-        text(known
-                 ? FormatAge(presence.node_state_age_ms)
-                 : (has_diagnostics && !diagnostics_fresh ? "stale"
-                                                          : "not seen")) |
-            color(known ? Color::White : Color::YellowLight),
+        text(known ? FormatAge(presence.node_state_age_ms)
+                   : (has_diagnostics && !diagnostics_fresh ? "stale"
+                                                            : "not seen")) |
+            color(known ? theme::TextMuted() : theme::Warning()),
         text(" "),
     });
   }
@@ -187,42 +192,31 @@ ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
   if (layout.compact()) {
     if (layout.short_height) {
       return vbox({
-                 summary | bgcolor(Color::RGB(18, 23, 36)),
-                 host_list->Render() | frame | vscroll_indicator |
-                     size(HEIGHT, EQUAL,
-                          std::max(1, layout.content_height - 2)),
-                 short_detail |
-                     size(HEIGHT, EQUAL, 1) |
-                     bgcolor(Color::RGB(18, 23, 36)),
-             }) |
-             flex;
+          summary | bgcolor(theme::BackgroundElement()),
+          host_list->Render() | frame | vscroll_indicator |
+              size(HEIGHT, EQUAL, std::max(1, layout.content_height - 2)),
+          short_detail | bgcolor(theme::BackgroundElement()),
+      });
     }
     return vbox({
-               summary | bgcolor(Color::RGB(18, 23, 36)),
-               Panel("Nodes",
-                     host_list->Render() | frame | vscroll_indicator) |
-                   flex,
-               Panel("Selected", compact_detail) |
-                   size(HEIGHT, EQUAL, 6),
-           }) |
-           flex;
+        summary | bgcolor(theme::BackgroundElement()),
+        Panel("Nodes", host_list->Render() | frame | vscroll_indicator) |
+            flex,
+        Panel("Node Detail", detail | frame | vscroll_indicator) |
+            size(HEIGHT, EQUAL, std::max(6, layout.content_height / 2)),
+    });
   }
 
-  const int detail_width =
-      layout.wide() ? std::min(48, std::max(40, layout.content_width / 3))
-                    : std::max(34, layout.content_width / 2);
   return vbox({
-             Panel("Network Presence", summary),
-             hbox({
-                 Panel("Nodes", host_list->Render() | frame |
-                                    vscroll_indicator) |
-                     flex,
-                 Panel("Node Detail", detail | frame | vscroll_indicator) |
-                     size(WIDTH, EQUAL, detail_width),
-             }) |
-                 flex,
-         }) |
-         flex;
+      summary | bgcolor(theme::BackgroundElement()),
+      hbox({
+          Panel("Nodes", host_list->Render() | frame | vscroll_indicator) |
+              flex,
+          Panel("Node Detail", detail | frame | vscroll_indicator) |
+              size(WIDTH, EQUAL, detail_width),
+      }) |
+          flex,
+  });
 }
 
 }  // namespace tui

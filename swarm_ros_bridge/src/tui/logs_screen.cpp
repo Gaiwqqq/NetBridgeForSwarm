@@ -1,9 +1,12 @@
 #include "tui/logs_screen.hpp"
 
-#include "tui/screen_common.hpp"
+#include "tui/format.hpp"
+#include "tui/theme.hpp"
 
 #include <ftxui/dom/elements.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -12,83 +15,123 @@ namespace tui {
 
 namespace {
 
-struct LogLine {
-  std::string level;
-  std::string message;
-  ftxui::Color color;
-};
+ftxui::Color LevelColor(const std::string& level) {
+  if (level == "ERROR" || level == "FATAL") {
+    return theme::Error();
+  }
+  if (level == "WARN") {
+    return theme::Warning();
+  }
+  if (level == "INFO") {
+    return theme::Info();
+  }
+  return theme::TextDim();  // DEBUG and anything else.
+}
 
-std::vector<LogLine> BuildPreviewLogs(const config::BridgeConfig& config) {
-  std::vector<LogLine> logs;
-  logs.push_back({"INFO", "✅ bridge config loaded for host " + config.hostname,
-                  ftxui::Color::GreenLight});
-  logs.push_back({"INFO",
-                  "🛰 " + std::to_string(config.topics.size()) +
-                      " topic rules are ready for inspection",
-                  ftxui::Color::CyanLight});
-  logs.push_back({"WARN",
-                  "⚠ watch latency, jitter and stability in the live topic matrix",
-                  ftxui::Color::YellowLight});
-  logs.push_back({"INFO", "📦 transport: Zenoh 1.9; vendored libraries: FTXUI, Draco",
-                  ftxui::Color::Magenta1});
-  return logs;
+std::string LevelTag(const std::string& level) {
+  if (level == "FATAL") {
+    return "FATAL";
+  }
+  if (level.size() > 5) {
+    return level.substr(0, 5);
+  }
+  return level;
 }
 
 }  // namespace
 
-ftxui::Element RenderLogsScreen(const config::BridgeConfig& config,
-                                const ViewState& state,
+ftxui::Element RenderLogsScreen(const ViewState& state,
+                                const LogStore& log_store,
+                                ftxui::Component level_filter,
                                 const LayoutContext& layout) {
   using namespace ftxui;
 
-  const auto logs = BuildPreviewLogs(config);
+  const std::string min_level = state.log_levels[static_cast<std::size_t>(
+      std::max(0, std::min<int>(state.selected_log_level,
+                                static_cast<int>(state.log_levels.size()) -
+                                    1)))];
+  const auto records = log_store.Records(min_level);
+
+  const bool bare_layout = layout.compact() && layout.short_height;
+  const int body_width =
+      std::max(1, layout.content_width - (bare_layout ? 0 : 2));
+  const int visible_capacity =
+      std::max(1, layout.content_height - (bare_layout ? 1 : 9));
+  const std::size_t first_visible =
+      records.size() > static_cast<std::size_t>(visible_capacity)
+          ? records.size() - static_cast<std::size_t>(visible_capacity)
+          : 0U;
+  const std::size_t visible_count = records.size() - first_visible;
+
+  const int stamp_width = body_width < 56 ? 9 : 11;
+  const int level_width = 7;
+  const int node_width = body_width >= 100 ? 20
+                         : body_width >= 72 ? 16
+                         : body_width >= 56 ? 12
+                                            : 0;
+  const int message_width =
+      std::max(4, body_width - stamp_width - level_width - node_width);
+
   std::vector<Element> lines;
-  for (const auto& log : logs) {
-    if (state.selected_log_level == 1 && log.level != "INFO") continue;
-    if (state.selected_log_level == 2 && log.level != "WARN") continue;
-    if (state.selected_log_level == 3 && log.level != "ERROR") continue;
-
-    lines.push_back(hbox({
-        text(" " + log.level + " ") | bold | bgcolor(log.color) | color(Color::Black),
-        paragraph(" " + log.message) | color(Color::GrayLight) | flex,
-    }));
+  lines.reserve(visible_count);
+  for (std::size_t index = first_visible; index < records.size(); ++index) {
+    const auto& record = records[index];
+    std::vector<Element> columns{
+        text(" " + record.stamp + " ") | color(theme::TextDim()) |
+            size(WIDTH, EQUAL, stamp_width),
+        text(" " + LevelTag(record.level) + " ") | bold |
+            color(LevelColor(record.level)) |
+            size(WIDTH, EQUAL, level_width),
+    };
+    if (node_width > 0) {
+      columns.push_back(
+          text(EndEllipsis(record.node, node_width - 1) + " ") |
+          color(theme::Primary()) | size(WIDTH, EQUAL, node_width));
+    }
+    columns.push_back(
+        text(EndEllipsis(record.message, message_width)) |
+        color(theme::Text()) | size(WIDTH, EQUAL, message_width));
+    lines.push_back(hbox(std::move(columns)));
   }
 
-  std::vector<Element> filter_chips;
-  for (std::size_t i = 0; i < state.log_levels.size(); ++i) {
-    const bool active = static_cast<int>(i) == state.selected_log_level;
-    filter_chips.push_back(
-        text(" " + state.log_levels[i] + " ") |
-        (active ? bgcolor(Color::SkyBlue1) | color(Color::Black)
-                : color(Color::GrayLight)));
+  const std::string count_label =
+      layout.compact()
+          ? std::to_string(visible_count) + "/" +
+                std::to_string(records.size())
+          : "showing " + std::to_string(visible_count) + " / " +
+                std::to_string(records.size()) + " filtered / " +
+                std::to_string(log_store.TotalCount()) + " total";
+  auto filter_row = hbox({
+      level_filter->Render(),
+      filler(),
+      text(count_label) | color(theme::TextDim()),
+  });
+
+  Element body;
+  if (lines.empty()) {
+    body = vbox({
+        spinner(3, static_cast<std::size_t>(state.animation_frame)) |
+            color(theme::Primary()),
+        text("Waiting for /rosout messages" +
+             (min_level == "All" ? std::string("...")
+                                 : std::string(" at " + min_level + "+..."))) |
+            color(theme::TextDim()),
+    }) | center;
+  } else {
+    body = vbox(std::move(lines));
   }
 
-  Element filters = hbox(filter_chips);
-  if (layout.compact() && layout.content_width < 48) {
-    filters = vbox({
-        hbox({filter_chips[0], filter_chips[1]}),
-        hbox({filter_chips[2], filter_chips[3]}),
+  if (layout.compact() && layout.short_height) {
+    return vbox({
+        filter_row | bgcolor(theme::BackgroundElement()),
+        body | flex,
     });
   }
 
-  auto log_lines =
-      vbox(lines.empty() ? std::vector<Element>{text("No logs in this filter.")}
-                         : lines) |
-      frame | vscroll_indicator;
-  if (layout.short_height) {
-    return vbox({
-               filters | bgcolor(Color::RGB(18, 23, 36)),
-               log_lines | flex,
-           }) |
-           flex;
-  }
-
   return vbox({
-             Panel(layout.compact() ? "Level" : "Filters", filters),
-             Panel("Log Preview", log_lines) |
-                 flex,
-         }) |
-         flex;
+      Panel("Filters", filter_row),
+      Panel("rosout", body) | flex,
+  });
 }
 
 }  // namespace tui

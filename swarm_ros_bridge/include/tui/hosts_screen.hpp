@@ -16,6 +16,13 @@
 namespace swarm_ros_bridge {
 namespace tui {
 
+ftxui::Element HostRowElement(
+    const std::string& hostname,
+    const swarm_ros_bridge::NetworkInfo* presence,
+    bool selected,
+    bool focused,
+    int name_width);
+
 ftxui::Element RenderHostsScreen(const config::BridgeConfig& config,
                                  const ViewState& state,
                                  const std::shared_ptr<diagnostics::DiagnosticsCache>&

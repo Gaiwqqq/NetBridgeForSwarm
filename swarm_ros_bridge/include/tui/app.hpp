@@ -3,6 +3,8 @@
 
 #include "config/bridge_config.hpp"
 #include "diagnostics/diagnostics_cache.hpp"
+#include "tui/history_store.hpp"
+#include "tui/log_store.hpp"
 #include "tui/view_state.hpp"
 
 #include <ftxui/component/component.hpp>
@@ -15,7 +17,8 @@ namespace tui {
 class App {
  public:
   App(config::BridgeConfig config,
-      std::shared_ptr<diagnostics::DiagnosticsCache> diagnostics_cache);
+      std::shared_ptr<diagnostics::DiagnosticsCache> diagnostics_cache,
+      std::shared_ptr<LogStore> log_store);
   int Run();
 
  private:
@@ -24,6 +27,8 @@ class App {
 
   config::BridgeConfig config_;
   std::shared_ptr<diagnostics::DiagnosticsCache> diagnostics_cache_;
+  std::shared_ptr<LogStore> log_store_;
+  HistoryStore history_;
   ViewState state_;
   std::vector<std::string> host_entries_;
   std::vector<std::string> topic_entries_;

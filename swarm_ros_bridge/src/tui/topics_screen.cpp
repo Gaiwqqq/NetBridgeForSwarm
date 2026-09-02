@@ -1,10 +1,12 @@
 #include "tui/topics_screen.hpp"
 
-#include "tui/screen_common.hpp"
+#include "tui/format.hpp"
+#include "tui/theme.hpp"
 
 #include <ftxui/dom/elements.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -14,22 +16,29 @@ namespace tui {
 
 namespace {
 
-std::string JoinHosts(const std::vector<std::string>& hosts) {
-  if (hosts.empty()) {
-    return "-";
-  }
-  std::string joined = hosts.front();
-  for (std::size_t i = 1; i < hosts.size(); ++i) {
-    joined += ", " + hosts[i];
-  }
-  return joined;
-}
+constexpr int kDetailedColumnsWidth = 49;
+constexpr int kCompactColumnsWidth = 17;
 
-std::string EndEllipsis(const std::string& value, int max_width) {
-  if (max_width <= 3 || static_cast<int>(value.size()) <= max_width) {
-    return value;
+std::string ShortType(const std::string& msg_type) {
+  if (msg_type == "sensor_msgs/Image") {
+    return "Img";
   }
-  return value.substr(0, static_cast<std::size_t>(max_width - 3)) + "...";
+  if (msg_type == "sensor_msgs/CompressedImage") {
+    return "Jpg";
+  }
+  if (msg_type == "sensor_msgs/PointCloud2") {
+    return "Cloud";
+  }
+  if (msg_type == "nav_msgs/Odometry") {
+    return "Odom";
+  }
+  const auto slash = msg_type.find_last_of('/');
+  std::string raw =
+      slash == std::string::npos ? msg_type : msg_type.substr(slash + 1);
+  if (raw.size() > 6) {
+    raw = raw.substr(0, 5) + ".";
+  }
+  return raw;
 }
 
 std::string CodecLabel(const config::TopicRule& topic) {
@@ -54,48 +63,93 @@ std::string TransportLabel(const config::BridgeConfig& config,
              : "Zenoh";
 }
 
-std::string ImageResizeLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/Image") {
-    return "-";
-  }
-  std::ostringstream stream;
-  stream.setf(std::ios::fixed);
-  stream.precision(2);
-  stream << topic.image_resize_rate << "x";
-  return stream.str();
+ftxui::Element DirectionStrip(const std::string& title,
+                              const ftxui::Color& accent,
+                              bool has_info,
+                              const swarm_ros_bridge::NetworkInfo& info) {
+  using namespace ftxui;
+  const std::string rate =
+      has_info ? FormatMetric(info.direction == "send" ? info.send_rate_hz
+                                                       : info.recv_rate_hz,
+                              " Hz")
+               : "--";
+  const std::string bandwidth =
+      has_info ? FormatMetric(info.bandwidth_kbps, " kbps") : "--";
+  const std::string packet =
+      has_info ? std::to_string(info.packet_size) + " B" : "--";
+  const std::string drops =
+      has_info ? std::to_string(info.dropped_messages) : "--";
+  return hbox({
+             text("▏ ") | color(accent),
+             text(title) | bold | color(accent) | size(WIDTH, EQUAL, 6),
+             text(rate) | color(theme::Text()) | size(WIDTH, EQUAL, 10) |
+                 align_right,
+             text(bandwidth) | color(theme::Text()) |
+                 size(WIDTH, EQUAL, 13) | align_right,
+             filler(),
+             text("pkt " + packet + "  drop " + drops) |
+                 color(theme::TextMuted()),
+         }) |
+         xflex_grow | bgcolor(theme::BackgroundElement());
 }
 
-std::string ImageJpegQualityLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/Image") {
-    return "-";
-  }
-  return std::to_string(topic.image_jpeg_quality);
+ftxui::Element InspectorField(const std::string& label,
+                              const std::string& value,
+                              const ftxui::Color& color,
+                              int available_width) {
+  return FieldRow(label, value, color, available_width);
 }
 
-std::string ImageAdaptiveQualityLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/Image") {
-    return "-";
+ftxui::Element WrappedPath(const std::string& value, int available_width) {
+  using namespace ftxui;
+  const std::size_t width =
+      static_cast<std::size_t>(std::max(8, available_width));
+  std::vector<Element> lines;
+  std::size_t start = 0;
+  while (start < value.size()) {
+    std::size_t end = std::min(value.size(), start + width);
+    if (end < value.size()) {
+      const std::size_t slash = value.rfind('/', end);
+      if (slash != std::string::npos && slash > start) {
+        end = slash;
+      }
+    }
+    if (end == start) {
+      end = std::min(value.size(), start + width);
+    }
+    lines.push_back(text(value.substr(start, end - start)) | bold |
+                    color(theme::Text()));
+    start = end;
   }
-  return topic.image_adaptive_quality ? "on" : "off";
+  if (lines.empty()) {
+    lines.push_back(text("-") | color(theme::TextDim()));
+  }
+  return vbox(std::move(lines));
 }
 
-std::string ImageQualityRangeLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/Image" || !topic.image_adaptive_quality) {
-    return "-";
-  }
-  return std::to_string(topic.image_min_jpeg_quality) + " - " +
-         std::to_string(topic.image_max_jpeg_quality);
-}
+}  // namespace
 
-std::string ImageTargetBandwidthLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/Image" || !topic.image_adaptive_quality) {
-    return "-";
-  }
-  std::ostringstream stream;
-  stream.setf(std::ios::fixed);
-  stream.precision(topic.image_target_bandwidth_kbps >= 100.0 ? 0 : 1);
-  stream << topic.image_target_bandwidth_kbps << " kbps";
-  return stream.str();
+TopicPaneGeometry MakeTopicPaneGeometry(const LayoutContext& layout) {
+  TopicPaneGeometry geometry;
+  geometry.split = layout.content_width >= 120 && layout.content_height >= 22;
+  geometry.inspector_width =
+      geometry.split
+          ? std::max(40, std::min(48, layout.content_width / 3))
+          : layout.content_width;
+  geometry.matrix_width =
+      geometry.split ? layout.content_width - geometry.inspector_width
+                     : layout.content_width;
+  const int panel_chrome =
+      layout.compact() && layout.short_height ? 0 : 2;
+  geometry.matrix_inner_width =
+      std::max(1, geometry.matrix_width - panel_chrome);
+  geometry.detailed_columns =
+      !layout.compact() && geometry.matrix_inner_width >= 70;
+  geometry.name_width = std::max(
+      8, geometry.matrix_inner_width -
+             (geometry.detailed_columns ? kDetailedColumnsWidth
+                                        : kCompactColumnsWidth));
+  return geometry;
 }
 
 std::vector<std::string> TopicAliases(const config::TopicRule& topic) {
@@ -111,130 +165,104 @@ std::vector<std::string> TopicAliases(const config::TopicRule& topic) {
   return aliases;
 }
 
-std::string FormatMetric(double value, const std::string& suffix) {
-  if (value < 0.0) {
-    return "--";
-  }
-  std::ostringstream stream;
-  stream.setf(std::ios::fixed);
-  stream.precision(value >= 100.0 ? 0 : 1);
-  stream << value << suffix;
-  return stream.str();
-}
-
-std::string BandwidthPressure(float bandwidth_kbps) {
-  if (bandwidth_kbps <= 0.0F) {
-    return "IDLE";
-  }
-  if (bandwidth_kbps < 256.0F) {
-    return "LOW";
-  }
-  if (bandwidth_kbps < 2048.0F) {
-    return "MID";
-  }
-  return "HIGH";
-}
-
-ftxui::Color BandwidthPressureColor(float bandwidth_kbps) {
-  using ftxui::Color;
-  if (bandwidth_kbps <= 0.0F) {
-    return Color::GrayDark;
-  }
-  if (bandwidth_kbps < 256.0F) {
-    return Color::GreenLight;
-  }
-  if (bandwidth_kbps < 2048.0F) {
-    return Color::YellowLight;
-  }
-  return Color::RedLight;
-}
-
-ftxui::Element MetricLine(const std::string& label, const std::string& value) {
+ftxui::Element TopicRowElement(const config::TopicRule& topic,
+                               const swarm_ros_bridge::NetworkInfo* live_info,
+                               bool highlighted,
+                               int name_width,
+                               bool detailed) {
   using namespace ftxui;
-  return hbox({
-      text(label) | color(Color::GrayLight),
-      filler(),
-      text(value) | color(Color::White),
-  });
-}
+  const float bandwidth =
+      live_info != nullptr ? live_info->bandwidth_kbps : 0.0F;
+  const auto pressure_color = PressureColor(bandwidth);
+  const std::string dot = PressureDot(bandwidth);
 
-void AppendLine(std::vector<ftxui::Element>* lines,
-                const std::string& label,
-                const std::string& value) {
-  if (lines == nullptr) {
-    return;
+  const std::string name =
+      MiddleEllipsis(topic.topic_name, static_cast<std::size_t>(
+                                          std::max(8, name_width)));
+  auto name_part =
+      hbox({
+          text(highlighted ? "▸ " : "  "),
+          text(name) | size(WIDTH, EQUAL, std::max(8, name_width)),
+      }) |
+      (highlighted ? bold | color(theme::Text()) : color(theme::TextMuted()));
+
+  ftxui::Element row;
+  if (!detailed) {
+    row = hbox({
+        text(dot + " ") | color(pressure_color),
+        name_part | flex,
+        text(live_info != nullptr ? FormatMetric(bandwidth, " kbps") : "--") |
+            color(pressure_color),
+        text(" "),
+    });
+  } else {
+    const float rate =
+        live_info != nullptr
+            ? (live_info->direction == "send" ? live_info->send_rate_hz
+                                              : live_info->recv_rate_hz)
+            : -1.0F;
+    const float stability =
+        live_info != nullptr ? live_info->stability_score : -1.0F;
+    const std::uint32_t drops =
+        live_info != nullptr ? live_info->dropped_messages : 0;
+    row = hbox({
+        text(dot + " ") | color(pressure_color),
+        name_part | flex,
+        text(ShortType(topic.msg_type)) | color(theme::Info()) |
+            size(WIDTH, EQUAL, 6),
+        text(FormatMetric(rate, " Hz")) | color(theme::Text()) |
+            size(WIDTH, EQUAL, 9) | align_right,
+        Bar(live_info != nullptr ? bandwidth / 2048.0F : 0.0F,
+            pressure_color) |
+            size(WIDTH, EQUAL, 8),
+        text(FormatMetric(bandwidth, " kbps")) | color(pressure_color) |
+            size(WIDTH, EQUAL, 11) | align_right,
+        text(std::to_string(drops)) |
+            color(drops > 0 ? theme::Warning() : theme::TextDim()) |
+            size(WIDTH, EQUAL, 5) | align_right,
+        text(FormatMetric(stability, "%")) |
+            color(stability >= 0.0F && stability < 80.0F ? theme::Error()
+                                                         : theme::Success()) |
+            size(WIDTH, EQUAL, 5) | align_right,
+        text(" "),
+    });
   }
-  lines->push_back(ftxui::text(label + value));
-}
-
-ftxui::Element DirectionSummary(const std::string& title,
-                                const ftxui::Color& accent,
-                                bool has_info,
-                                const swarm_ros_bridge::NetworkInfo& info,
-                                bool compact) {
-  using namespace ftxui;
-  const std::string rate =
-      has_info ? FormatMetric(info.direction == "send" ? info.send_rate_hz : info.recv_rate_hz,
-                              " Hz")
-               : "--";
-  const std::string bandwidth = has_info ? FormatMetric(info.bandwidth_kbps, " kbps") : "--";
-  const std::string packet =
-      has_info ? std::to_string(info.packet_size) + " B" : "--";
-  const std::string drops =
-      has_info ? std::to_string(info.dropped_messages) : "--";
-  if (compact) {
-    return hbox({
-               text(" " + title + " ") | bold | color(accent),
-               text(rate) | color(Color::White),
-               text("  ") | color(Color::GrayLight),
-               text(bandwidth) | color(Color::White),
-               filler(),
-               text("drop " + drops + " ") | color(Color::GrayLight),
-           }) |
-           bgcolor(Color::RGB(18, 23, 36));
+  if (highlighted) {
+    return row | bgcolor(theme::BackgroundSelected());
   }
-  return hbox({
-             text(title) | bold | color(accent),
-             text("  ") ,
-             text("rate ") | color(Color::GrayLight),
-             text(rate) | color(Color::White),
-             text("  bw ") | color(Color::GrayLight),
-             text(bandwidth) | color(Color::White),
-             text("  pkt ") | color(Color::GrayLight),
-             text(packet) | color(Color::White),
-             text("  drop ") | color(Color::GrayLight),
-             text(drops) | color(Color::White),
-         }) |
-         borderRounded | bgcolor(Color::RGB(18, 23, 36));
+  return row;
 }
-
-}  // namespace
 
 ftxui::Element RenderTopicsScreen(
     const config::BridgeConfig& config,
     const ViewState& state,
     const std::shared_ptr<diagnostics::DiagnosticsCache>& diagnostics_cache,
+    const HistoryStore& history,
     ftxui::Component topic_list,
     const LayoutContext& layout) {
   using namespace ftxui;
 
-  Element details = text("No topics configured.") | color(Color::GrayLight);
-  Element compact_details =
-      text("No topics configured.") | color(Color::GrayLight);
-  Element short_details = compact_details;
-  Element transfer_summary = text("Select a topic to inspect send/recv state.") |
-                             color(Color::GrayLight);
-  Element compact_transfer_summary = transfer_summary;
+  Element inspector =
+      vbox({text("Select a topic to inspect send/recv state.") |
+            color(theme::TextDim())});
+  Element transfer_summary = inspector;
+  Element short_inspector = inspector;
+  const auto geometry = MakeTopicPaneGeometry(layout);
+  const int inspector_body_width = std::max(
+      20, geometry.inspector_width -
+              (layout.compact() && layout.short_height ? 0 : 2));
+
   if (!config.topics.empty()) {
-    const int selected_index =
-        std::min<int>(state.selected_topic, static_cast<int>(config.topics.size()) - 1);
+    const int selected_index = std::min<int>(
+        state.selected_topic, static_cast<int>(config.topics.size()) - 1);
     const auto& topic = config.topics[selected_index];
     const auto aliases = TopicAliases(topic);
     swarm_ros_bridge::NetworkInfo live_info;
     swarm_ros_bridge::NetworkInfo send_info;
     swarm_ros_bridge::NetworkInfo recv_info;
     const bool has_live_info =
-        diagnostics_cache != nullptr && diagnostics_cache->LookupAny(aliases, &live_info);
+        diagnostics_cache != nullptr &&
+        diagnostics_cache->LookupAny(aliases, &live_info);
     const bool has_send_info =
         diagnostics_cache != nullptr &&
         diagnostics_cache->LookupDirected(aliases, "send", &send_info);
@@ -242,226 +270,236 @@ ftxui::Element RenderTopicsScreen(
         diagnostics_cache != nullptr &&
         diagnostics_cache->LookupDirected(aliases, "recv", &recv_info);
     const float pressure_bandwidth =
-        has_send_info && has_recv_info
-            ? std::max(send_info.bandwidth_kbps, recv_info.bandwidth_kbps)
-            : (has_send_info ? send_info.bandwidth_kbps
-                             : (has_recv_info ? recv_info.bandwidth_kbps
-                                              : (has_live_info ? live_info.bandwidth_kbps : 0.0F)));
-    const auto pressure_color = BandwidthPressureColor(pressure_bandwidth);
-    std::vector<Element> config_lines = {
-        paragraph("Sources: " + JoinHosts(topic.src_hosts)),
-        paragraph("Targets: " + JoinHosts(topic.dst_hosts)),
-        paragraph("Transport: " + TransportLabel(config, topic) +
-                  " / QoS: " + topic.qos_class),
-        text("Prefix: " + std::string(topic.prefix ? "on" : "off")),
-        text("Same prefix: " + std::string(topic.same_prefix ? "on" : "off")),
-    };
+        has_live_info ? live_info.bandwidth_kbps : 0.0F;
+    const auto pressure_color = PressureColor(pressure_bandwidth);
 
+    // -- header ---------------------------------------------------------------
+    auto header = vbox({
+        WrappedPath(topic.topic_name, inspector_body_width),
+        hbox({
+            BadgeOutline(ShortType(topic.msg_type), theme::Info()),
+            text(" "),
+            BadgeOutline(EndEllipsis(topic.qos_class, 12),
+                         theme::TextMuted()),
+            text(" "),
+            Badge(has_live_info ? PressureLabel(pressure_bandwidth) : "WAIT",
+                  has_live_info ? pressure_color : theme::Warning()),
+        }),
+        separatorStyled(BorderStyle::LIGHT) | color(theme::BorderSubtle()),
+    });
+
+    // -- routing / transport --------------------------------------------------
+    std::vector<Element> routing_rows = {
+        InspectorField("Type", topic.msg_type, theme::Info(),
+                       inspector_body_width),
+        InspectorField("Sources", JoinHosts(topic.src_hosts), theme::Text(),
+                       inspector_body_width),
+        InspectorField("Targets", JoinHosts(topic.dst_hosts), theme::Text(),
+                       inspector_body_width),
+        InspectorField("Transport", TransportLabel(config, topic),
+                       theme::Text(), inspector_body_width),
+        InspectorField("Prefix", topic.prefix ? "on" : "off",
+                       theme::TextMuted(), inspector_body_width),
+        InspectorField("Same prefix", topic.same_prefix ? "on" : "off",
+                       theme::TextMuted(), inspector_body_width),
+    };
     if (topic.msg_type == "sensor_msgs/PointCloud2") {
-      AppendLine(&config_lines, "Cloud codec: ", CodecLabel(topic));
+      routing_rows.push_back(
+          InspectorField("Cloud codec", CodecLabel(topic), theme::Text(),
+                         inspector_body_width));
       if (topic.cloud_downsample > 0.0) {
         std::ostringstream stream;
         stream.setf(std::ios::fixed);
         stream.precision(topic.cloud_downsample >= 1.0 ? 2 : 4);
         stream << topic.cloud_downsample;
-        AppendLine(&config_lines, "Downsample: ", stream.str());
+        routing_rows.push_back(InspectorField(
+            "Downsample", stream.str(), theme::Text(), inspector_body_width));
       }
     }
 
+    // -- image quality --------------------------------------------------------
+    std::vector<Element> image_rows;
     if (topic.msg_type == "sensor_msgs/Image") {
-      AppendLine(&config_lines, "Image resize: ", ImageResizeLabel(topic));
-      AppendLine(&config_lines, "JPEG quality: ", ImageJpegQualityLabel(topic));
-      AppendLine(&config_lines, "Adaptive JPEG: ", ImageAdaptiveQualityLabel(topic));
+      std::ostringstream resize_stream;
+      resize_stream.setf(std::ios::fixed);
+      resize_stream.precision(2);
+      resize_stream << topic.image_resize_rate << "x";
+      image_rows.push_back(
+          InspectorField("Resize", resize_stream.str(), theme::Text(),
+                         inspector_body_width));
+      image_rows.push_back(InspectorField(
+          "JPEG quality", std::to_string(topic.image_jpeg_quality),
+          theme::Text(), inspector_body_width));
+      image_rows.push_back(
+          InspectorField("Adaptive JPEG",
+                         topic.image_adaptive_quality ? "on" : "off",
+                         topic.image_adaptive_quality ? theme::Success()
+                                                      : theme::TextMuted(),
+                         inspector_body_width));
       if (topic.image_adaptive_quality) {
-        AppendLine(&config_lines, "Quality range: ", ImageQualityRangeLabel(topic));
-        AppendLine(&config_lines, "Target BW: ", ImageTargetBandwidthLabel(topic));
-        AppendLine(&config_lines,
-                   "Current JPEG: ",
-                   has_live_info && live_info.current_jpeg_quality > 0
-                       ? std::to_string(live_info.current_jpeg_quality)
-                       : "-");
+        image_rows.push_back(InspectorField(
+            "Quality range", std::to_string(topic.image_min_jpeg_quality) +
+                                 " - " +
+                                 std::to_string(topic.image_max_jpeg_quality),
+            theme::Text(), inspector_body_width));
+        std::ostringstream bw_stream;
+        bw_stream.setf(std::ios::fixed);
+        bw_stream.precision(topic.image_target_bandwidth_kbps >= 100.0 ? 0
+                                                                       : 1);
+        bw_stream << topic.image_target_bandwidth_kbps << " kbps";
+        image_rows.push_back(
+            InspectorField("Target BW", bw_stream.str(), theme::Text(),
+                           inspector_body_width));
+        image_rows.push_back(InspectorField(
+            "Current JPEG",
+            has_live_info && live_info.current_jpeg_quality > 0
+                ? std::to_string(live_info.current_jpeg_quality)
+                : "-",
+            theme::Text(), inspector_body_width));
       }
-      AppendLine(&config_lines,
-                 "Receiver loss: ",
-                 has_recv_info
-                     ? FormatMetric(recv_info.image_loss_rate_pct, "%")
-                     : "--");
-      AppendLine(&config_lines,
-                 "Complete frames: ",
-                 has_recv_info
-                     ? FormatMetric(
-                           recv_info.complete_frame_success_rate_pct, "%")
-                     : "--");
-      AppendLine(&config_lines,
-                 "Effective RX: ",
-                 has_recv_info
-                     ? FormatMetric(
-                           recv_info.effective_recv_bandwidth_kbps, " kbps")
-                     : "--");
-      AppendLine(&config_lines,
-                 "Decoded / expected: ",
-                 has_recv_info
-                     ? std::to_string(recv_info.decoded_frames) + " / " +
-                           std::to_string(recv_info.expected_frames)
-                     : "--");
+      image_rows.push_back(InspectorField(
+          "Receiver loss",
+          has_recv_info ? FormatMetric(recv_info.image_loss_rate_pct, "%")
+                        : "--",
+          has_recv_info && recv_info.image_loss_rate_pct > 5.0F
+              ? theme::Warning()
+              : theme::Text(),
+          inspector_body_width));
+      image_rows.push_back(InspectorField(
+          "Complete frames",
+          has_recv_info
+              ? FormatMetric(recv_info.complete_frame_success_rate_pct, "%")
+              : "--",
+          theme::Text(), inspector_body_width));
+      image_rows.push_back(InspectorField(
+          "Effective RX",
+          has_recv_info
+              ? FormatMetric(recv_info.effective_recv_bandwidth_kbps, " kbps")
+              : "--",
+          theme::Text(), inspector_body_width));
+      image_rows.push_back(InspectorField(
+          "Decoded / expected",
+          has_recv_info ? std::to_string(recv_info.decoded_frames) + " / " +
+                              std::to_string(recv_info.expected_frames)
+                        : "--",
+          theme::Text(), inspector_body_width));
     }
 
+    // -- live metrics ---------------------------------------------------------
+    std::vector<Element> live_rows = {
+        InspectorField("Latency",
+                       has_live_info
+                           ? FormatMetric(live_info.avg_latency_ms, " ms")
+                           : "--",
+                       theme::Accent(), inspector_body_width),
+        InspectorField("Jitter",
+                       has_live_info ? FormatMetric(live_info.jitter_ms, " ms")
+                                     : "--",
+                       theme::Text(), inspector_body_width),
+        InspectorField("Stability",
+                       has_live_info
+                           ? FormatMetric(live_info.stability_score, "%")
+                           : "--",
+                       theme::Success(), inspector_body_width),
+        InspectorField("Last recv age",
+                       has_live_info
+                           ? FormatMetric(live_info.last_recv_age_ms, " ms")
+                           : "--",
+                       theme::Text(), inspector_body_width),
+    };
+
+    // -- transfer + trend -----------------------------------------------------
     transfer_summary = vbox({
-                           text("Live Transfer") | bold | color(Color::White),
-                           DirectionSummary("SEND", Color::Magenta1,
-                                            has_send_info, send_info,
-                                            layout.compact()),
-                           DirectionSummary("RECV", Color::CyanLight,
-                                            has_recv_info, recv_info,
-                                            layout.compact()),
-                       });
-    compact_transfer_summary = vbox({
-        DirectionSummary("SEND", Color::Magenta1, has_send_info, send_info,
-                         true),
-        DirectionSummary("RECV", Color::CyanLight, has_recv_info, recv_info,
-                         true),
+        SectionLabel("Live Transfer"),
+        DirectionStrip("SEND", theme::Accent(), has_send_info, send_info),
+        DirectionStrip("RECV", theme::Info(), has_recv_info, recv_info),
+    });
+    const auto topic_history = history.BandwidthKbps(aliases);
+    auto trend = vbox({
+        SectionLabel("Bandwidth Trend"),
+        Sparkline(topic_history, theme::Primary()) |
+            size(HEIGHT, EQUAL, 3),
     });
 
-    details = vbox({
-                  text(topic.topic_name) | bold | color(Color::White),
-                  text(topic.msg_type) | color(Color::CyanLight),
-                  separator(),
-                  hbox({
-                      text("Pressure: ") | color(Color::GrayLight),
-                      text(has_live_info ? BandwidthPressure(live_info.bandwidth_kbps) : "WAIT") |
-                          bold | color(pressure_color),
-                  }),
-                  vbox(std::move(config_lines)),
-                  separator(),
-                  MetricLine("Latency",
-                             has_live_info ? FormatMetric(live_info.avg_latency_ms, " ms") : "--"),
-                  MetricLine("Jitter",
-                             has_live_info ? FormatMetric(live_info.jitter_ms, " ms") : "--"),
-                  MetricLine("Stability",
-                             has_live_info ? FormatMetric(live_info.stability_score, "%") : "--"),
-                  MetricLine("Last recv age",
-                             has_live_info ? FormatMetric(live_info.last_recv_age_ms, " ms")
-                                           : "--"),
-              }) |
-              color(Color::GrayLight);
-
-    std::vector<Element> compact_detail_lines = {
-        paragraph(topic.topic_name) | bold | color(Color::White),
-        hbox({
-            text(topic.qos_class + " / ") | color(Color::CyanLight),
-            text(has_live_info ? BandwidthPressure(live_info.bandwidth_kbps)
-                               : "WAIT") |
-                bold | color(pressure_color),
-            filler(),
-            text(has_live_info
-                     ? FormatMetric(live_info.avg_latency_ms, " ms")
-                     : "--") |
-                color(Color::Magenta1),
-        }),
-    };
-    if (topic.msg_type == "sensor_msgs/Image") {
-      compact_detail_lines.push_back(hbox({
-          text("loss ") | color(Color::GrayLight),
-          text(has_recv_info
-                   ? FormatMetric(recv_info.image_loss_rate_pct, "%")
-                   : "--") |
-              color(Color::White),
-          text("  complete ") | color(Color::GrayLight),
-          text(has_recv_info
-                   ? FormatMetric(
-                         recv_info.complete_frame_success_rate_pct, "%")
-                   : "--") |
-              color(Color::White),
-          filler(),
-          text(has_recv_info
-                   ? FormatMetric(
-                         recv_info.effective_recv_bandwidth_kbps, " kbps")
-                   : "--") |
-              color(Color::CyanLight),
-      }));
+    std::vector<Element> inspector_parts{header, SectionLabel("Routing")};
+    inspector_parts.insert(inspector_parts.end(), routing_rows.begin(),
+                           routing_rows.end());
+    if (!image_rows.empty()) {
+      inspector_parts.push_back(SectionLabel("Image Quality"));
+      inspector_parts.insert(inspector_parts.end(), image_rows.begin(),
+                             image_rows.end());
     }
-    compact_details = vbox(std::move(compact_detail_lines));
-    short_details = hbox({
-                        text(" " + EndEllipsis(
-                                        topic.topic_name,
-                                        std::max(8, layout.content_width - 24))) |
-                            bold | color(Color::White),
-                        filler(),
-                        text(topic.qos_class + " ") | color(Color::CyanLight),
-                        text(has_live_info
-                                 ? BandwidthPressure(live_info.bandwidth_kbps)
-                                 : "WAIT") |
-                            bold | color(pressure_color),
-                        text(" "),
-                    });
+    inspector_parts.push_back(SectionLabel("Live Metrics"));
+    inspector_parts.insert(inspector_parts.end(), live_rows.begin(),
+                           live_rows.end());
+    inspector_parts.push_back(trend);
+    inspector = vbox(std::move(inspector_parts));
+    short_inspector = hbox({
+        text(" " + EndEllipsis(topic.topic_name,
+                               std::max(8, layout.content_width - 12))) |
+            bold | color(theme::Text()),
+        filler(),
+        text(has_live_info ? PressureLabel(pressure_bandwidth) : "WAIT") |
+            bold |
+            color(has_live_info ? pressure_color : theme::Warning()),
+        text(" "),
+    });
   }
 
-  auto legend = hbox({
-                   text(" LOW ") | color(Color::Black) | bgcolor(Color::GreenLight),
-                   text(" "),
-                   text(" MID ") | color(Color::Black) | bgcolor(Color::YellowLight),
-                   text(" "),
-                   text(" HIGH ") | color(Color::Black) | bgcolor(Color::RedLight),
-                   text("  bandwidth pressure coloring") | color(Color::GrayLight),
-               });
-
-  auto topic_panel_body = vbox({
-      legend,
-      separator(),
-      topic_list->Render() | frame | vscroll_indicator | flex,
-      separator(),
-      transfer_summary,
+  // -- topic matrix ----------------------------------------------------------
+  auto matrix_header = hbox({
+      text("    topic") | color(theme::TextDim()) |
+          size(WIDTH, EQUAL, geometry.name_width + 4),
+      text("type") | color(theme::TextDim()) | size(WIDTH, EQUAL, 6),
+      text("rate") | color(theme::TextDim()) | size(WIDTH, EQUAL, 9) |
+          align_right,
+      text("bandwidth") | color(theme::TextDim()) |
+          size(WIDTH, EQUAL, 19) | align_right,
+      text("drop") | color(theme::TextDim()) | size(WIDTH, EQUAL, 5) |
+          align_right,
+      text("stab") | color(theme::TextDim()) | size(WIDTH, EQUAL, 5) |
+          align_right,
+      text(" "),
   });
-
-  if (layout.wide()) {
-    const int inspector_width =
-        std::max(34, std::min(44, layout.content_width / 3));
-    return hbox({
-               Panel("Topic Matrix", topic_panel_body) | flex,
-               Panel("Inspector", details) |
-                   size(WIDTH, EQUAL, inspector_width),
-           }) |
-           flex;
-  }
 
   if (layout.compact()) {
     if (layout.short_height) {
       return vbox({
-                 topic_list->Render() | frame | vscroll_indicator |
-                     size(HEIGHT, EQUAL,
-                          std::max(1, layout.content_height - 1)),
-                 short_details |
-                     size(HEIGHT, EQUAL, 1) |
-                     bgcolor(Color::RGB(18, 23, 36)),
-             }) |
-             flex;
+          topic_list->Render() | frame | vscroll_indicator | flex,
+          separatorStyled(BorderStyle::LIGHT) | color(theme::BorderSubtle()),
+          short_inspector,
+      });
     }
     return vbox({
-               Panel("Topics",
-                     vbox({
-                         topic_list->Render() | frame | vscroll_indicator |
-                             flex,
-                         separator(),
-                         transfer_summary,
-                     })) |
-                   flex,
-               Panel("Selected", compact_details) |
-                   size(HEIGHT, EQUAL, 7),
-           }) |
-           flex;
+        Panel("Topics", topic_list->Render() | frame | vscroll_indicator) |
+            flex,
+        Panel("Inspector", inspector | frame | vscroll_indicator) |
+            size(HEIGHT, EQUAL, std::max(6, layout.content_height / 2)),
+    });
   }
 
-  const int inspector_height =
-      std::max(8, std::min(13, layout.content_height / 2));
+  const auto matrix_body = vbox({
+      matrix_header,
+      separatorStyled(BorderStyle::LIGHT) | color(theme::BorderSubtle()),
+      topic_list->Render() | frame | vscroll_indicator | flex,
+      separatorStyled(BorderStyle::LIGHT) | color(theme::BorderSubtle()),
+      transfer_summary,
+  });
+
+  if (geometry.split) {
+    return hbox({
+        Panel("Topic Matrix", matrix_body) | flex,
+        Panel("Inspector", inspector | frame | vscroll_indicator) |
+            size(WIDTH, EQUAL, geometry.inspector_width),
+    });
+  }
+
   return vbox({
-             Panel("Topics",
-                   topic_list->Render() | frame | vscroll_indicator) |
-                 flex,
-             Panel("Selected",
-                   vbox({compact_details, compact_transfer_summary})) |
-                 size(HEIGHT, EQUAL, inspector_height),
-         }) |
-         flex;
+      Panel("Topic Matrix", matrix_body) | flex,
+      Panel("Inspector", inspector | frame | vscroll_indicator) |
+          size(HEIGHT, EQUAL,
+               std::max(6, std::min(12, layout.content_height / 3))),
+  });
 }
 
 }  // namespace tui

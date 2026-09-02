@@ -12,11 +12,20 @@ struct ViewState {
   int selected_topic{0};
   int selected_host{0};
   int selected_log_level{0};
-  int focused_panel{0};
+  bool show_help{false};
+  bool show_quit_confirm{false};
+  int animation_frame{0};
   std::vector<std::string> nav_items{
       "Overview", "Topics", "Hosts", "Logs"};
   std::vector<std::string> log_levels{
       "All", "Info", "Warn", "Error"};
+
+  void AdvanceFrame() {
+    ++animation_frame;
+    if (animation_frame < 0) {
+      animation_frame = 0;
+    }
+  }
 };
 
 }  // namespace tui

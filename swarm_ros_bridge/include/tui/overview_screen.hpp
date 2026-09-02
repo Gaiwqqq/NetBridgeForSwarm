@@ -3,6 +3,7 @@
 
 #include "config/bridge_config.hpp"
 #include "diagnostics/diagnostics_cache.hpp"
+#include "tui/history_store.hpp"
 #include "tui/screen_common.hpp"
 
 #include <ftxui/dom/elements.hpp>
@@ -14,6 +15,7 @@ namespace tui {
 ftxui::Element RenderOverviewScreen(
     const config::BridgeConfig& config,
     const std::shared_ptr<diagnostics::DiagnosticsCache>& diagnostics_cache,
+    const HistoryStore& history,
     const LayoutContext& layout);
 
 }  // namespace tui

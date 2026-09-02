@@ -41,6 +41,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   nav_msgs
   visualization_msgs
+  rosgraph_msgs
 )
 
 find_package(PCL REQUIRED COMPONENTS common filters io octree)
@@ -81,6 +82,7 @@ catkin_package(
      sensor_msgs
      nav_msgs
      visualization_msgs
+     rosgraph_msgs
 )
 
 include_directories(
@@ -126,6 +128,10 @@ target_link_libraries(bridge_new
 add_executable(bridge_tui
     src/nodes/bridge_tui_main.cpp
     src/tui/app.cpp
+    src/tui/theme.cpp
+    src/tui/format.cpp
+    src/tui/history_store.cpp
+    src/tui/log_store.cpp
     src/tui/overview_screen.cpp
     src/tui/topics_screen.cpp
     src/tui/hosts_screen.cpp
@@ -253,8 +259,23 @@ if(CATKIN_ENABLE_TESTING)
 
   add_executable(test_tui_layout
       test/tui_layout_test.cpp
+      src/tui/theme.cpp
+      src/tui/format.cpp
+      src/tui/history_store.cpp
+      src/tui/log_store.cpp
+      src/tui/overview_screen.cpp
+      src/tui/topics_screen.cpp
+      src/tui/hosts_screen.cpp
+      src/tui/logs_screen.cpp
+      src/diagnostics/diagnostics_cache.cpp
   )
-  target_include_directories(test_tui_layout PRIVATE include)
+  target_include_directories(test_tui_layout PRIVATE include
+      ${catkin_INCLUDE_DIRS}
+  )
+  add_dependencies(test_tui_layout
+          ${${PROJECT_NAME}_EXPORTED_TARGETS}
+          ${catkin_EXPORTED_TARGETS}
+  )
   target_link_libraries(test_tui_layout ftxui::ftxui)
   add_test(NAME tui_responsive_layout COMMAND test_tui_layout)
 endif()

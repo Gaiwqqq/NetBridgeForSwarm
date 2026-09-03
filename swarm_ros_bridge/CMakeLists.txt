@@ -171,6 +171,7 @@ install(DIRECTORY include/
 if(CATKIN_ENABLE_TESTING)
   catkin_install_python(PROGRAMS
     scripts/bridge_test_publisher.py
+    scripts/topic_routing_matrix_test.sh
     scripts/three_node_transport_test.sh
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
   )

@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="hostname"/>
+  <arg name="control_listen_port"/>
+  <arg name="image_listen_port"/>
+  <arg name="cloud_listen_port"/>
+  <arg name="control_connect_endpoints" default="[]"/>
+  <arg name="image_connect_endpoints" default="[]"/>
+  <arg name="cloud_connect_endpoints" default="[]"/>
+
+  <node pkg="swarm_ros_bridge"
+        type="bridge_new"
+        name="swarm_bridge_$(arg hostname)"
+        output="screen">
+    <rosparam command="load"
+              file="$(find swarm_ros_bridge)/config/topic_routing_matrix_test.yaml"/>
+    <param name="hostname" type="string" value="$(arg hostname)"/>
+
+    <rosparam param="zenoh/listen_endpoints" subst_value="true">
+      ["tcp/127.0.0.1:$(arg control_listen_port)"]
+    </rosparam>
+    <rosparam param="zenoh/connect_endpoints" subst_value="true">
+      $(arg control_connect_endpoints)
+    </rosparam>
+    <rosparam param="zenoh/image_session/listen_endpoints" subst_value="true">
+      ["udp/127.0.0.1:$(arg image_listen_port)?rel=1;mixed_rel=1;multistream=1"]
+    </rosparam>
+    <rosparam param="zenoh/image_session/connect_endpoints" subst_value="true">
+      $(arg image_connect_endpoints)
+    </rosparam>
+    <rosparam param="zenoh/cloud_session/listen_endpoints" subst_value="true">
+      ["tcp/127.0.0.1:$(arg cloud_listen_port)"]
+    </rosparam>
+    <rosparam param="zenoh/cloud_session/connect_endpoints" subst_value="true">
+      $(arg cloud_connect_endpoints)
+    </rosparam>
+  </node>
+</launch>

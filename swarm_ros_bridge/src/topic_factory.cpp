@@ -146,16 +146,59 @@ TopicFactory::TopicFactory(
       static_cast<std::uint32_t>(topic_cfg_.img_adapt_cooldown_frames_);
   if (send_or_recv_ == SEND) {
     sub_last_time_ = ros::Time(0);
-    sub_ = nh_public_->subscribe<
-        const ros::MessageEvent<topic_tools::ShapeShifter const>&>(
-        topic_cfg_.name_, SUB_QUEUE_SIZE, &TopicFactory::shapeShifterCallback,
-        this, ros::TransportHints().tcpNoDelay());
+    {
+      std::lock_guard<std::mutex> lock(sender_subscription_mutex_);
+      subscribeSenderLocked();
+    }
+    sender_watch_timer_ = nh_public_->createWallTimer(
+        ros::WallDuration(0.2), &TopicFactory::watchSenderPublishers, this);
     INFO_MSG(" DISCOVER " << topic_cfg_.name_ << " | " << topic_cfg_.max_freq_
                            << "Hz");
   }
 }
 
 TopicFactory::~TopicFactory() { stopThread(); }
+
+void TopicFactory::subscribeSenderLocked() {
+  sub_ = nh_public_->subscribe<
+      const ros::MessageEvent<topic_tools::ShapeShifter const>&>(
+      topic_cfg_.name_, SUB_QUEUE_SIZE, &TopicFactory::shapeShifterCallback,
+      this, ros::TransportHints().tcpNoDelay());
+}
+
+void TopicFactory::watchSenderPublishers(const ros::WallTimerEvent&) {
+  if (send_or_recv_ != SEND || schemaConflict()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    if (!schema_ready_) {
+      return;
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(sender_subscription_mutex_);
+  if (sub_.getNumPublishers() > 0U) {
+    sender_publisher_seen_ = true;
+    sender_rearmed_after_disconnect_ = false;
+    return;
+  }
+  if (!sender_publisher_seen_ || sender_rearmed_after_disconnect_) {
+    return;
+  }
+
+  // roscpp specializes a wildcard ShapeShifter subscription after its first
+  // connection. Recreate it once the publisher disconnects so that a later
+  // publisher with a changed MD5 reaches configureSenderSchema(), where the
+  // rule is permanently quarantined instead of being silently rejected by the
+  // TCPROS handshake.
+  sub_.shutdown();
+  subscribeSenderLocked();
+  sender_publisher_seen_ = false;
+  sender_rearmed_after_disconnect_ = true;
+  ROS_INFO_STREAM("[TopicFactory] rearmed type discovery for "
+                  << topic_cfg_.name_ << " after publisher disconnect");
+}
 
 void TopicFactory::shapeShifterCallback(
     const ros::MessageEvent<const topic_tools::ShapeShifter>& event) {
@@ -593,7 +636,11 @@ void TopicFactory::applySchemaQuarantine(const std::string& error) {
     schema_ready_ = false;
   }
   if (send_or_recv_ == SEND) {
-    sub_.shutdown();
+    sender_watch_timer_.stop();
+    {
+      std::lock_guard<std::mutex> lock(sender_subscription_mutex_);
+      sub_.shutdown();
+    }
     sender_.reset();
     dynamic_senders_.clear();
     schema_publisher_.reset();
@@ -1201,7 +1248,11 @@ void TopicFactory::createThread() {
 
 void TopicFactory::stopThread() {
   if (send_or_recv_ == SEND) {
-    sub_.shutdown();
+    sender_watch_timer_.stop();
+    {
+      std::lock_guard<std::mutex> lock(sender_subscription_mutex_);
+      sub_.shutdown();
+    }
     dynamic_senders_.clear();
     sender_.reset();
     schema_publisher_.reset();

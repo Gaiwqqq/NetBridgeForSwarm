@@ -820,6 +820,18 @@ cd ~/netbridge_ws
 ./src/NetBridgeForSwarm/swarm_ros_bridge/scripts/three_node_transport_test.sh
 ```
 
+The full topic-routing matrix starts four isolated ROS Masters. Two sources and
+two destinations exercise many-to-one, one-to-many, and strict 2x2
+many-to-many routing for Odometry, Image, Draco PointCloud2, and an unregistered
+custom message. It also checks schema MD5/codec/transport consistency,
+non-destination isolation, multi-source conflicts, and runtime type-change
+quarantine:
+
+```bash
+cd ~/netbridge_ws
+./src/NetBridgeForSwarm/swarm_ros_bridge/scripts/topic_routing_matrix_test.sh
+```
+
 See [`swarm_ros_bridge/docs/ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md) for physical-link acceptance, weak-network testing, rollout, and rollback criteria.
 
 ## Troubleshooting

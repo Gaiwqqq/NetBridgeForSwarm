@@ -102,6 +102,7 @@ class TopicFactory {
 
   ros::Time sub_last_time_;
   ros::Subscriber sub_;
+  ros::WallTimer sender_watch_timer_;
   ros::Publisher pub_;
   std::atomic<bool> recv_thread_flag_{false};
   std::thread recv_thread_;
@@ -112,6 +113,9 @@ class TopicFactory {
   std::condition_variable schema_condition_;
   std::deque<swarm_ros_bridge::transport::TransportEnvelope> recv_queue_;
   mutable std::mutex schema_mutex_;
+  std::mutex sender_subscription_mutex_;
+  bool sender_publisher_seen_{false};
+  bool sender_rearmed_after_disconnect_{false};
   swarm_ros_bridge::transport::TopicSchema schema_;
   bool schema_ready_{false};
   std::atomic<std::uint64_t> sequence_{0};
@@ -137,6 +141,8 @@ class TopicFactory {
 
   void shapeShifterCallback(
       const ros::MessageEvent<const topic_tools::ShapeShifter>& event);
+  void subscribeSenderLocked();
+  void watchSenderPublishers(const ros::WallTimerEvent& event);
   bool configureSenderSchema(const topic_tools::ShapeShifter& message,
                              bool latching,
                              std::string* error);

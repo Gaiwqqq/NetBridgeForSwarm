@@ -1,0 +1,174 @@
+config:
+  debug: false
+  odom_convert: false
+  monitor_node: true
+  warn_threshold: 3
+  monitor_rate_hz: 100
+
+hosts:
+  - groundStation0
+  - groundStation1
+  - drone1
+  - drone2
+
+zenoh:
+  mode: peer
+  multicast_scouting: false
+  gossip_scouting: false
+  compression_enabled: false
+  listen_endpoints: []
+  connect_endpoints: []
+  service_timeout_ms: 1000
+  image_session:
+    enabled: true
+    multicast_scouting: false
+    gossip_scouting: false
+    compression_enabled: false
+    listen_endpoints: []
+    connect_endpoints: []
+  cloud_session:
+    enabled: true
+    multicast_scouting: false
+    gossip_scouting: false
+    multicast_address: "224.0.0.225:7446"
+    compression_enabled: false
+    listen_endpoints: []
+    connect_endpoints: []
+
+services: []
+
+topics:
+  # Many-to-one: two independent ROS masters publish the same logical topics.
+  - topic_name: /test/m2o/odom
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+
+  - topic_name: /test/m2o/image
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    imgResizeRate: 1.0
+    imgJpegQuality: 80
+    imgAdaptiveQuality: false
+
+  - topic_name: /test/m2o/cloud
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    cloudCompress: true
+    cloudCodec: draco
+    cloudDownsample: -1.0
+
+  - topic_name: /test/m2o/generic
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+
+  # One-to-many: one ROS master publishes to two independent destinations.
+  - topic_name: /test/o2m/odom
+    qos_class: state
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+
+  - topic_name: /test/o2m/image
+    qos_class: bulk
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+    imgResizeRate: 1.0
+    imgJpegQuality: 80
+    imgAdaptiveQuality: false
+
+  - topic_name: /test/o2m/cloud
+    qos_class: bulk
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+    cloudCompress: true
+    cloudCodec: draco
+    cloudDownsample: -1.0
+
+  - topic_name: /test/o2m/generic
+    qos_class: state
+    srcIP: [groundStation0]
+    dstIP: [drone1, drone2]
+    max_freq: 5
+    prefix: false
+    same_prefix: false
+
+  # Many-to-many: every source must reach both destination ROS masters.
+  - topic_name: /test/m2m/odom
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0, groundStation1]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+
+  - topic_name: /test/m2m/image
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0, groundStation1]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    imgResizeRate: 1.0
+    imgJpegQuality: 80
+    imgAdaptiveQuality: false
+
+  - topic_name: /test/m2m/cloud
+    qos_class: bulk
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0, groundStation1]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+    cloudCompress: true
+    cloudCodec: draco
+    cloudDownsample: -1.0
+
+  - topic_name: /test/m2m/generic
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0, groundStation1]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+
+  # Different types from different sources must quarantine the complete rule.
+  - topic_name: /test/conflict/sources
+    qos_class: state
+    srcIP: [drone1, drone2]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false
+
+  # Rebinding one live source to a different type must quarantine its sender.
+  - topic_name: /test/conflict/runtime
+    qos_class: state
+    srcIP: [drone1]
+    dstIP: [groundStation0]
+    max_freq: 5
+    prefix: true
+    same_prefix: false

@@ -819,6 +819,13 @@ cd ~/netbridge_ws
 ./src/NetBridgeForSwarm/swarm_ros_bridge/scripts/three_node_transport_test.sh
 ```
 
+完整 Topic 路由矩阵测试会启动四个隔离的 ROS Master，以两个来源和两个目标验证多对一、一对多及严格的 `2x2` 多对多。测试覆盖 Odometry、Image、Draco PointCloud2 和通用自定义消息，并检查 Schema MD5/codec/transport、非目标节点隔离、多来源 Schema 冲突及运行时消息换型隔离：
+
+```bash
+cd ~/netbridge_ws
+./src/NetBridgeForSwarm/swarm_ros_bridge/scripts/topic_routing_matrix_test.sh
+```
+
 完整实机验收、弱网测试、切换与回滚标准见 [`swarm_ros_bridge/docs/ZENOH_VALIDATION.md`](swarm_ros_bridge/docs/ZENOH_VALIDATION.md)。
 
 ## 故障排查

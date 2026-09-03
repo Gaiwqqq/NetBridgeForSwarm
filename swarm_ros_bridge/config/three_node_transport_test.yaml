@@ -39,7 +39,6 @@ services: []
 topics:
   # drone1 + drone2 -> station (prefix preserves source identity).
   - topic_name: /test/m2o/odom
-    msg_type: nav_msgs/Odometry
     qos_class: state
     srcIP: [drone1, drone2]
     dstIP: [groundStation0]
@@ -48,7 +47,6 @@ topics:
     same_prefix: false
 
   - topic_name: /test/m2o/image
-    msg_type: sensor_msgs/Image
     qos_class: bulk
     srcIP: [drone1, drone2]
     dstIP: [groundStation0]
@@ -60,7 +58,6 @@ topics:
     imgAdaptiveQuality: false
 
   - topic_name: /test/m2o/cloud
-    msg_type: sensor_msgs/PointCloud2
     qos_class: bulk
     srcIP: [drone1, drone2]
     dstIP: [groundStation0]
@@ -71,9 +68,18 @@ topics:
     cloudCodec: draco
     cloudDownsample: -1.0
 
+  # NetworkInfo is a project-defined message intentionally absent from
+  # MSGS_MACRO. This route proves custom types are forwarded dynamically.
+  - topic_name: /test/m2o/generic
+    qos_class: state
+    srcIP: [drone1]
+    dstIP: [groundStation0]
+    max_freq: 10
+    prefix: true
+    same_prefix: false
+
   # station -> drone1 + drone2.
   - topic_name: /test/o2m/odom
-    msg_type: nav_msgs/Odometry
     qos_class: state
     srcIP: [groundStation0]
     dstIP: [drone1, drone2]
@@ -82,7 +88,6 @@ topics:
     same_prefix: false
 
   - topic_name: /test/o2m/image
-    msg_type: sensor_msgs/Image
     qos_class: bulk
     srcIP: [groundStation0]
     dstIP: [drone1, drone2]
@@ -94,7 +99,6 @@ topics:
     imgAdaptiveQuality: false
 
   - topic_name: /test/o2m/cloud
-    msg_type: sensor_msgs/PointCloud2
     qos_class: bulk
     srcIP: [groundStation0]
     dstIP: [drone1, drone2]

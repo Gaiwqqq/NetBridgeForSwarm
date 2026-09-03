@@ -110,6 +110,7 @@ add_executable(bridge_new
     src/transport/pointcloud_codec.cpp
     src/transport/draco_pointcloud_codec.cpp
     src/transport/bridge_transport.cpp
+    src/transport/topic_schema_registry.cpp
     src/transport/zenoh_transport.cpp
 )
 add_dependencies(bridge_new
@@ -205,6 +206,7 @@ if(CATKIN_ENABLE_TESTING)
   add_executable(test_bridge_transport
       test/bridge_transport_test.cpp
       src/transport/bridge_transport.cpp
+      src/transport/topic_schema_registry.cpp
   )
   target_include_directories(test_bridge_transport PRIVATE include)
   add_test(NAME bridge_transport_wire COMMAND test_bridge_transport)

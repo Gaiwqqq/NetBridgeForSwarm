@@ -57,7 +57,6 @@ services:
 topics:
 # --------- Swarm Info ---------- #
 - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
-  msg_type: visualization_msgs/MarkerArray
   qos_class: bulk
   srcIP:
     - drone1
@@ -68,7 +67,6 @@ topics:
   same_prefix: false
 
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
-  msg_type: sensor_msgs/PointCloud2
   qos_class: bulk
   cloudCompress: true
   cloudDownsample: -1.0
@@ -82,7 +80,6 @@ topics:
   same_prefix: true
 
 - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
-  msg_type: sensor_msgs/PointCloud2
   qos_class: bulk
   cloudCompress: true
   cloudDownsample: -1.0
@@ -96,7 +93,6 @@ topics:
   same_prefix: true
 
 - topic_name: /ekf_quat/ekf_odom
-  msg_type: nav_msgs/Odometry
   qos_class: state
   srcIP:
     - drone1
@@ -107,7 +103,6 @@ topics:
   same_prefix: false
 
 # - topic_name: /goal_with_id_from_station
-#   msg_type: quadrotor_msgs/GoalSet
 #   qos_class: command
 #   srcIP:
 #     - groundStation0
@@ -118,7 +113,6 @@ topics:
 #   same_prefix: true
 
 - topic_name: /camera/color/image_raw
-  msg_type: sensor_msgs/Image
   qos_class: bulk
   imgResizeRate: 1.0
   imgJpegQuality: 85

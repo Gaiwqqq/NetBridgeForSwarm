@@ -12,8 +12,9 @@
 namespace swarm_ros_bridge {
 namespace transport {
 
-constexpr std::uint16_t kBridgeProtocolVersion = 1;
+constexpr std::uint16_t kBridgeProtocolVersion = 2;
 constexpr std::size_t kMaxEnvelopePayloadBytes = 512U * 1024U * 1024U;
+constexpr std::size_t kMaxRosMessageDefinitionBytes = 16U * 1024U * 1024U;
 
 enum class PayloadKind : std::uint8_t {
   kRosSerialized = 0,
@@ -21,6 +22,8 @@ enum class PayloadKind : std::uint8_t {
   kPointCloudCompressed = 2,
   kServiceRequest = 3,
   kServiceResponse = 4,
+  kTopicSchemaRequest = 5,
+  kTopicSchemaResponse = 6,
 };
 
 enum class QosClass : std::uint8_t {
@@ -54,6 +57,10 @@ struct TransportEnvelope {
   std::string source_host;
   std::string ros_type;
   std::string ros_md5;
+  std::string ros_definition;
+  std::string wire_codec;
+  std::string routing_mode;
+  bool latching{false};
   std::string frame_id;
   std::vector<std::uint8_t> payload;
 };
@@ -104,6 +111,25 @@ bool ValidateEnvelopeMetadata(const TransportEnvelope& envelope,
                               const std::string& expected_ros_md5,
                               std::string* error = nullptr);
 
+struct TopicSchema {
+  std::string ros_type;
+  std::string ros_md5;
+  std::string ros_definition;
+  std::string wire_codec{"ros1"};
+  std::string routing_mode{"fanout"};
+  bool latching{false};
+};
+
+bool ValidateTopicSchema(const TopicSchema& schema,
+                         std::string* error = nullptr);
+bool TopicSchemasCompatible(const TopicSchema& lhs,
+                            const TopicSchema& rhs,
+                            std::string* error = nullptr);
+TopicSchema TopicSchemaFromEnvelope(const TransportEnvelope& envelope);
+void SetEnvelopeTopicSchema(const TopicSchema& schema,
+                            bool include_definition,
+                            TransportEnvelope* envelope);
+
 bool ParseQosClass(const std::string& value, QosClass* qos_class);
 const char* QosClassName(QosClass qos_class);
 QosPolicy GetQosPolicy(QosClass qos_class);
@@ -119,6 +145,8 @@ std::string TopicDirectedKey(const std::string& source_host,
                              const std::string& ros_topic);
 std::string ServiceKey(const std::string& server_host,
                        const std::string& ros_service);
+std::string TopicSchemaKey(const std::string& source_host,
+                           const std::string& ros_topic);
 std::string AliveKey(const std::string& hostname);
 bool ParseAliveKey(const std::string& key, std::string* hostname);
 

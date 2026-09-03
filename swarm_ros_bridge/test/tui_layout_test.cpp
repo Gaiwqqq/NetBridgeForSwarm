@@ -182,7 +182,6 @@ int main() {
   // -- topic row renders with and without live info ---------------------------
   swarm_ros_bridge::config::TopicRule rule;
   rule.topic_name = "/camera/image";
-  rule.msg_type = "sensor_msgs/Image";
   RenderToScreen(swarm_ros_bridge::tui::TopicRowElement(rule, nullptr, false, 24,
                                                         true),
                  60, 1, "topic row without live info");
@@ -191,6 +190,7 @@ int main() {
   live.stability_score = 95.0F;
   live.dropped_messages = 2;
   live.direction = "send";
+  live.msg_type = "sensor_msgs/Image";
   live.send_rate_hz = 15.0F;
   RenderToScreen(swarm_ros_bridge::tui::TopicRowElement(rule, &live, true, 24,
                                                         true),
@@ -202,7 +202,7 @@ int main() {
   // The actual 120-column matrix keeps both the topic identity and metrics.
   rule.topic_name =
       "/drone_0_ego_planner_node/grid_map/occupancy";
-  rule.msg_type = "sensor_msgs/PointCloud2";
+  live.msg_type = "sensor_msgs/PointCloud2";
   const auto wide_topic_row =
       RenderToScreen(swarm_ros_bridge::tui::TopicRowElement(
                          rule, &live, true, screenshot_topics.name_width,

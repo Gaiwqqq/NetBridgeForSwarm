@@ -45,6 +45,7 @@ The bridge does not expose the entire ROS graph indiscriminately. It transports 
 - One-to-one, one-to-many, many-to-one, and fleet-wide routing through `srcIP`/`dstIP` allowlists.
 - Three isolated Zenoh sessions: TCP for control/state/services, UDP for images, and dedicated TCP for point clouds.
 - `command`, `state`, and `bulk` topic QoS classes with purpose-specific reliability, priority, and congestion behavior.
+- Topic-name-only configuration with ROS1 connection-header discovery of type, MD5, full definition, and latching state.
 - Automatic JPEG transport for `sensor_msgs/Image`, including resize and target-bandwidth adaptive quality.
 - VoxelGrid downsampling plus Draco or PCL Octree compression for `sensor_msgs/PointCloud2`.
 - Preservation and validation of ROS type, MD5, source host, sequence, timestamp, and `frame_id` metadata.
@@ -85,7 +86,7 @@ flowchart LR
 | Image | `sensor_msgs/Image`, encoded as JPEG by the bridge | UDP | Keep image loss or retransmission pressure away from control traffic |
 | Cloud | `sensor_msgs/PointCloud2`, optionally compressed | Dedicated TCP | Carry large point clouds without sharing the control TCP session |
 
-Zenoh receive callbacks only validate and enqueue envelopes. Joinable worker threads perform ROS deserialization and publication. The wire protocol uses a versioned `NBZ1` envelope; receivers reject mismatched protocol versions, ROS types, and MD5 sums.
+Zenoh receive callbacks only validate and enqueue envelopes. Joinable worker threads perform ROS deserialization and publication. The wire protocol uses a versioned `NBZ2` envelope; the full schema is negotiated only on the Control Session, while data packets carry lightweight type/MD5/codec metadata.
 
 ## Environment and compatibility
 
@@ -101,22 +102,20 @@ Zenoh receive callbacks only validate and enqueue envelopes. Joinable worker thr
 > [!IMPORTANT]
 > The bundled Zenoh `.deb` files were built natively on Ubuntu 20.04. Do not copy packages built on a different Ubuntu release into Focal, and do not mix another Zenoh version with this build. Either can cause CMake or runtime ABI incompatibilities.
 
-Built-in message types:
+Ordinary ROS1 topics no longer require compile-time registration. The bridge uses `topic_tools::ShapeShifter` to forward the original ROS serialization and dynamically advertise from the remote schema, so the receiving bridge itself does not need the corresponding message package installed.
 
-- `std_msgs/String`
-- `geometry_msgs/PoseStamped`
+The following types have built-in wire-codec specializations:
+
 - `nav_msgs/Odometry`
 - `sensor_msgs/Image`
 - `sensor_msgs/PointCloud2`
-- `visualization_msgs/Marker`
-- `visualization_msgs/MarkerArray`
 
 Built-in service types:
 
 - `std_srvs/Empty`
 - `swarm_ros_bridge/AddTwoInts`
 
-Other types must be registered at compile time. See [Adding custom message and service types](#adding-custom-message-and-service-types).
+Only topics whose fields the bridge must inspect (currently `to_drone_ids`) need registration. Services still require compile-time registration; see [Adding custom message and service types](#adding-custom-message-and-service-types).
 
 ## Quick start
 
@@ -215,7 +214,6 @@ Add this rule to the `topics` list in [`swarm_ros_bridge/config/default.yaml`](s
 
 ```yaml
 - topic_name: /chatter
-  msg_type: std_msgs/String
   qos_class: state
   srcIP: [drone1]
   dstIP: [groundStation0]
@@ -340,7 +338,7 @@ The example launch files load two YAML files into the private ROS parameter name
 
 | File | Purpose | Consistency requirement |
 |---|---|---|
-| [`config/default.yaml`](swarm_ros_bridge/config/default.yaml) | Runtime options, Zenoh sessions, topics, and services | Routes and types should match; static endpoints may differ per machine |
+| [`config/default.yaml`](swarm_ros_bridge/config/default.yaml) | Runtime options, Zenoh sessions, topics, and services | Routes and codec options should match; static endpoints may differ per machine |
 | [`config/ip_real.yaml`](swarm_ros_bridge/config/ip_real.yaml) | Logical host inventory for real machines | Same on all machines |
 | [`config/default_sim.yaml`](swarm_ros_bridge/config/default_sim.yaml) | Example simulation routes | Same within one simulation |
 | [`config/ip_sim.yaml`](swarm_ros_bridge/config/ip_sim.yaml) | Simulation host inventory | Same within one simulation |
@@ -484,7 +482,6 @@ These fields apply to ROS services on the Control Session.
 ```yaml
 topics:
   - topic_name: /ekf_quat/ekf_odom
-    msg_type: nav_msgs/Odometry
     qos_class: state
     srcIP: [drone1]
     dstIP: [groundStation0]
@@ -496,7 +493,6 @@ topics:
 | Field | Required | Description |
 |---|:---:|---|
 | `topic_name` | Yes | ROS topic subscribed on the source; must begin with `/`; supports a `/drone_{id}/...` placeholder |
-| `msg_type` | Yes | ROS type name registered at compile time in `MSGS_MACRO` |
 | `qos_class` | Yes | `command`, `state`, or `bulk`; `service` is not valid for a topic |
 | `srcIP` | Yes | Logical hosts allowed to send the topic; accepts `all` and `all_drone` |
 | `dstIP` | Yes | Logical hosts that should receive the topic; accepts `all` and `all_drone` |
@@ -505,6 +501,14 @@ topics:
 | `same_prefix` | No | Publish below a shared `/bridge` prefix; defaults to `false` and takes precedence over `prefix` |
 
 `max_freq` controls only bridge forwarding; it does not modify the source publisher. Samples above the limit are dropped before encoding and counted in diagnostics.
+
+If a legacy `msg_type` field remains in the configuration, bridge startup fails with an instruction to remove it so that the value cannot be mistaken for a validation source. A rule remains `discovering` while no source publisher exists and becomes `ready` after the first ROS connection handshake.
+
+#### Schema discovery and consistency
+
+The source reads `datatype`, `md5sum`, `message_definition`, and `latching` from the ROS1 connection header and registers a `source host + logical topic` schema on the Control Session. Receivers fetch the schema before dynamically creating their ROS publishers; early data is retained by the existing QoS-bounded queue while negotiation completes.
+
+Within one YAML topic rule, every discovered source must have the same `datatype + ROS MD5 + routing mode + wire codec`. ROS MD5 already covers nested message dependencies; the full definition is used for dynamic publication and is not text-compared for comments or whitespace. A mismatched source, invalid definition, or runtime schema change puts the whole rule into sticky `conflict`: its ROS publisher is shut down, queued data is cleared, and later samples are rejected while unrelated topics and services continue. Correct the deployment and restart the bridge to clear the quarantine.
 
 #### Choosing a QoS class
 
@@ -537,7 +541,6 @@ Image rules contain the common topic fields and may add:
 
 ```yaml
 - topic_name: /camera/color/image_raw
-  msg_type: sensor_msgs/Image
   qos_class: bulk
   imgResizeRate: 1.0
   imgJpegQuality: 85
@@ -573,7 +576,6 @@ The sender converts every input image to `BGR8` before JPEG encoding, and the re
 
 ```yaml
 - topic_name: /lidar/points
-  msg_type: sensor_msgs/PointCloud2
   qos_class: bulk
   cloudCompress: true
   cloudDownsample: 0.10
@@ -633,12 +635,14 @@ When a registered custom message contains a `to_drone_ids` field of type `std::v
 
 1. `dstIP` defines the allowed candidate destinations.
 2. ID `N` in a message maps to logical host `droneN`.
-3. The message is published only on `netbridge/v1/topic/<source>/dst/<target>/...` keys.
+3. The message is published only on `netbridge/v2/topic/<source>/dst/<target>/...` keys.
 4. A target absent from `dstIP` is rejected and counted as a drop.
 
 This supports commands that carry different drone targets on one ROS topic without requiring every drone to receive and filter every message.
 
 ### Adding custom message and service types
+
+An ordinary custom topic requires no bridge, `package.xml`, or CMake changes: configure only its `topic_name`, and the bridge transparently carries its schema and serialized bytes. Add a message to `MSGS_MACRO` only when the bridge must inspect its `to_drone_ids` field:
 
 Edit [`swarm_ros_bridge/include/msgs_macro.hpp`](swarm_ros_bridge/include/msgs_macro.hpp):
 
@@ -647,7 +651,6 @@ Edit [`swarm_ros_bridge/include/msgs_macro.hpp`](swarm_ros_bridge/include/msgs_m
 #include <your_pkg/YourService.h>
 
 #define MSGS_MACRO \
-  /* Keep the existing entries. */ \
   X("your_pkg/YourMessage", your_pkg::YourMessage)
 
 #define SRVS_MACRO \
@@ -655,7 +658,7 @@ Edit [`swarm_ros_bridge/include/msgs_macro.hpp`](swarm_ros_bridge/include/msgs_m
   X("your_pkg/YourService", your_pkg::YourService)
 ```
 
-Add the corresponding dependencies to [`swarm_ros_bridge/package.xml`](swarm_ros_bridge/package.xml) and [`swarm_ros_bridge/CMakeLists.txt`](swarm_ros_bridge/CMakeLists.txt), then rebuild every machine. All nodes must use identical message definitions and MD5 sums.
+For field-level topic specializations and services, add dependencies to [`swarm_ros_bridge/package.xml`](swarm_ros_bridge/package.xml) and [`swarm_ros_bridge/CMakeLists.txt`](swarm_ros_bridge/CMakeLists.txt), then rebuild. A receiving bridge does not need an ordinary topic's message package, although the ROS application that subscribes to it must understand the type. Runtime ROS MD5 validation enforces identical message definitions.
 
 ## Deployment guide
 
@@ -789,12 +792,13 @@ TUI node states:
 
 | Data | Key format |
 |---|---|
-| Fanout/fixed-route topic | `netbridge/v1/topic/<source>/fanout/<ros-topic>` |
-| `to_drone_ids` directed topic | `netbridge/v1/topic/<source>/dst/<hostname>/<ros-topic>` |
-| Service | `netbridge/v1/service/<server>/<ros-service>` |
-| Node presence | `netbridge/v1/alive/<hostname>` |
+| Fanout/fixed-route topic | `netbridge/v2/topic/<source>/fanout/<ros-topic>` |
+| `to_drone_ids` directed topic | `netbridge/v2/topic/<source>/dst/<hostname>/<ros-topic>` |
+| Topic schema | `netbridge/v2/schema/<source>/<ros-topic>` |
+| Service | `netbridge/v2/service/<server>/<ros-service>` |
+| Node presence | `netbridge/v2/alive/<hostname>` |
 
-These keys are an internal protocol. A custom Zenoh application must also implement the `NBZ1` envelope and ROS type/MD5 checks.
+These keys are an internal protocol. A custom Zenoh application must implement the `NBZ2` envelope, schema request/response, and ROS type/MD5 checks. `NBZ1` and `NBZ2` are incompatible, so upgrade every bridge together.
 
 ## Testing
 
@@ -809,7 +813,7 @@ After building, run the local tests from the catkin workspace root:
 ./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-The end-to-end test starts three isolated ROS Masters and simulates `drone1 + drone2 + groundStation0`. It covers many-to-one and one-to-many Odometry, Image, and Draco PointCloud2 transport:
+The end-to-end test starts three isolated ROS Masters and simulates `drone1 + drone2 + groundStation0`. It covers many-to-one and one-to-many Odometry, Image, and Draco PointCloud2 transport, plus a dynamic custom `swarm_ros_bridge/NetworkInfo` topic that is absent from `MSGS_MACRO`:
 
 ```bash
 cd ~/netbridge_ws
@@ -847,7 +851,7 @@ If another version is installed, remove the conflict and repeat [Install Zenoh 1
 2. Check whether the AP, VLAN, or VPN filters discovery multicast.
 3. Disable multicast temporarily and configure all three sessions using [fixed endpoints](#option-b-fixed-endpoints).
 4. Make sure the firewall permits Control TCP, Image UDP, and Cloud TCP.
-5. Verify matching route directions, message types, and MD5 sums at both ends.
+5. Verify matching route directions and confirm `ready` schema state in the TUI; `conflict` includes the type, MD5, route, or codec mismatch reason.
 
 ### Image latency or frame loss is high
 
@@ -896,7 +900,7 @@ NetBridgeForSwarm/
 ## Security and known boundaries
 
 - Default UDP endpoints are unencrypted. Do not expose them directly to the public Internet or an untrusted network.
-- Only compile-time registered ROS messages and services are supported; this is not a transparent bridge for arbitrary runtime types.
+- Ordinary topics support arbitrary runtime ROS1 messages; field-level routing specializations and services still require compile-time registration.
 - `state` and `bulk` intentionally favor freshness through BestEffort and keep-latest behavior.
 - Current Odometry transport keeps only the pose subset, images are published as `BGR8`, and Draco XYZ positions use lossy quantization.
 - The supported baseline is ROS Noetic, Ubuntu 20.04, and Zenoh 1.9.0. Re-run the complete validation plan after upgrading any of them.

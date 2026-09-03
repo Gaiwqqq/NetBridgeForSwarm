@@ -123,6 +123,9 @@ start_process publisher_drone2 "${DRONE2_MASTER}" rosrun swarm_ros_bridge \
   _image_topic:=/test/m2o/image _cloud_topic:=/test/m2o/cloud \
   _inflated_cloud_topic:=/unused/drone2/cloud2 \
   _marker_topic:=/unused/drone2/markers
+start_process publisher_generic "${DRONE1_MASTER}" rostopic pub -r 3 \
+  /test/m2o/generic swarm_ros_bridge/NetworkInfo \
+  '{name: schema_probe, schema_state: ready}'
 
 # many-to-one: station must receive and distinguish both drones.
 expect_field "${STATION_MASTER}" /drone1/test/m2o/image/header/frame_id drone1_camera
@@ -131,6 +134,7 @@ expect_field "${STATION_MASTER}" /drone1/test/m2o/cloud/header/frame_id drone1_w
 expect_field "${STATION_MASTER}" /drone2/test/m2o/cloud/header/frame_id drone2_world
 expect_message "${STATION_MASTER}" /drone1/test/m2o/odom
 expect_message "${STATION_MASTER}" /drone2/test/m2o/odom
+expect_field "${STATION_MASTER}" /drone1/test/m2o/generic/name schema_probe
 
 # one-to-many: both drones must receive every transport class from the station.
 for master_uri in "${DRONE1_MASTER}" "${DRONE2_MASTER}"; do
@@ -163,6 +167,8 @@ def value(block, field):
     return float(match.group(1))
 
 for block in image_receivers:
+    if 'schema_state: "ready"' not in block:
+        raise SystemExit("image schema did not reach ready state")
     expected = value(block, "expected_frames")
     decoded = value(block, "decoded_frames")
     loss = value(block, "image_loss_rate_pct")
@@ -173,8 +179,18 @@ for block in image_receivers:
     if loss > 0.01 or success < 99.99 or bandwidth <= 0:
         raise SystemExit(
             f"bad image metrics: loss={loss}, success={success}, bw={bandwidth}")
+
+generic_receivers = [block for block in re.split(r"\n  - \n", text)
+                     if 'msg_type: "swarm_ros_bridge/NetworkInfo"' in block
+                     and 'direction: "recv"' in block]
+if len(generic_receivers) != 1:
+    raise SystemExit(f"expected one generic receiver, got {len(generic_receivers)}")
+if 'codec: "ros1"' not in generic_receivers[0] or \
+        'schema_state: "ready"' not in generic_receivers[0]:
+    raise SystemExit("generic topic did not use a ready ros1 schema")
 PY
 
 echo "PASS: 2 drones + 1 station, many-to-one and one-to-many"
 echo "PASS: control TCP + image UDP + cloud TCP"
 echo "PASS: image loss/success/effective-bandwidth diagnostics"
+echo "PASS: unregistered custom NetworkInfo ShapeShifter transport"

@@ -1,6 +1,7 @@
 #include "topic_factory.h"
 
 #include "cv_bridge/cv_bridge.h"
+#include "geometry_msgs/PoseStamped.h"
 #include "opencv2/opencv.hpp"
 #include "pcl/compression/octree_pointcloud_compression.h"
 #include "pcl/filters/voxel_grid.h"
@@ -11,6 +12,7 @@
 #include "swarm_ros_bridge/PtCloudCompress.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -26,6 +28,7 @@ std::string RosTypeMd5(const std::string& msg_type) {
   if (msg_type == type) {                         \
     return ros::message_traits::MD5Sum<classname>::value(); \
   }
+  SPECIALIZED_MSGS_MACRO
   MSGS_MACRO
 #undef X
   return {};
@@ -43,12 +46,14 @@ std::vector<std::uint8_t> SerializeRosMessage(const T& message) {
 template <typename T>
 ros::Publisher AdvertisePreservingHeader(
     const std::string& topic_name,
-    const std::shared_ptr<ros::NodeHandle>& node) {
+    const std::shared_ptr<ros::NodeHandle>& node,
+    bool latching) {
   ros::AdvertiseOptions options;
   options.init<T>(topic_name, PUB_QUEUE_SIZE);
   // roscpp normally overwrites Header.seq in the serialized output. The bridge
   // must publish the sequence received from the source host unchanged.
   options.has_header = false;
+  options.latch = latching;
   return node->advertise(options);
 }
 
@@ -56,27 +61,76 @@ std::int64_t RosTimeToNs(const ros::Time& stamp) {
   return stamp.isZero() ? 0 : static_cast<std::int64_t>(stamp.toNSec());
 }
 
+std::string WireCodecForTopic(const TopicCfg& topic,
+                              const std::string& ros_type) {
+  if (ros_type == "sensor_msgs/Image") {
+    return "jpeg";
+  }
+  if (ros_type == "sensor_msgs/PointCloud2") {
+    if (!topic.cloud_compress_) {
+      return "pointcloud_raw";
+    }
+    return topic.cloud_codec_ == "draco" ? "pointcloud_draco"
+                                           : "pointcloud_pcl_octree";
+  }
+  if (ros_type == "nav_msgs/Odometry") {
+    return "odom_pose";
+  }
+  return "ros1";
+}
+
+swarm_ros_bridge::transport::PayloadKind ExpectedPayloadKind(
+    const std::string& wire_codec) {
+  if (wire_codec == "jpeg") {
+    return swarm_ros_bridge::transport::PayloadKind::kJpeg;
+  }
+  if (wire_codec == "pointcloud_draco" ||
+      wire_codec == "pointcloud_pcl_octree") {
+    return swarm_ros_bridge::transport::PayloadKind::kPointCloudCompressed;
+  }
+  return swarm_ros_bridge::transport::PayloadKind::kRosSerialized;
+}
+
+template <typename T>
+bool ExtractRegisteredDestinations(
+    const topic_tools::ShapeShifter& message,
+    std::vector<std::string>* destinations) {
+  if constexpr (has_data_to_drone_ids<T, std::vector<uint8_t>>::value) {
+    const auto typed = message.instantiate<T>();
+    for (const std::uint8_t id : typed->to_drone_ids) {
+      destinations->push_back("drone" + std::to_string(id));
+    }
+    return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 TopicFactory::TopicFactory(
     const TopicCfg& topic_cfg,
-    std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transport,
+    const TopicTransports& transports,
+    std::shared_ptr<swarm_ros_bridge::transport::TopicSchemaRegistry>
+        schema_registry,
     SEND_OR_RECV send_or_recv,
     const std::shared_ptr<ros::NodeHandle>& nh_public)
     : topic_cfg_(topic_cfg),
       send_or_recv_(send_or_recv),
-      transport_(std::move(transport)) {
-  if (transport_ == nullptr) {
-    throw std::invalid_argument("TopicFactory requires a shared bridge transport");
+      transports_(transports),
+      schema_registry_(std::move(schema_registry)),
+      nh_public_(nh_public) {
+  if (transports_.control == nullptr || schema_registry_ == nullptr ||
+      nh_public_ == nullptr) {
+    throw std::invalid_argument(
+        "TopicFactory requires control transport, schema registry and ROS node");
   }
 
   metrics_state_.topic_name = topic_cfg_.name_;
-  metrics_state_.msg_type = topic_cfg_.type_;
+  metrics_state_.msg_type = "auto";
   metrics_state_.direction = send_or_recv_ == SEND ? "send" : "recv";
-  metrics_state_.codec = topic_cfg_.type_ == "sensor_msgs/PointCloud2"
-                             ? (topic_cfg_.cloud_compress_ ? topic_cfg_.cloud_codec_ : "raw")
-                             : (topic_cfg_.type_ == "sensor_msgs/Image" ? "jpeg" : "raw");
-  metrics_state_.transport = topic_cfg_.transport_name_;
+  metrics_state_.codec = "pending";
+  metrics_state_.transport = "pending";
+  metrics_state_.schema_state = "discovering";
   metrics_state_.qos_class =
       swarm_ros_bridge::transport::QosClassName(topic_cfg_.qos_class_);
   metrics_state_.configured_rate_hz = topic_cfg_.max_freq_;
@@ -91,79 +145,79 @@ TopicFactory::TopicFactory(
   metrics_state_.adapt_cooldown_frames =
       static_cast<std::uint32_t>(topic_cfg_.img_adapt_cooldown_frames_);
   if (send_or_recv_ == SEND) {
-    if (!topic_cfg_.dynamic_dst_) {
-      const std::string key = swarm_ros_bridge::transport::TopicFanoutKey(
-          topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
-      sender_ = transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
-      INFO_MSG(" SEND " << topic_cfg_.transport_name_ << " | " << key
-                         << " | " << topic_cfg_.max_freq_ << "Hz");
-    } else {
-      for (const auto& destination : topic_cfg_.dst_hostname_map_) {
-        if (!destination.second || destination.first == topic_cfg_.my_hostname_) {
-          continue;
-        }
-        const std::string key = swarm_ros_bridge::transport::TopicDirectedKey(
-            topic_cfg_.src_hostname_, destination.first, topic_cfg_.wire_name_);
-        dynamic_senders_[destination.first] =
-            transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
-      }
-      INFO_MSG(" SEND " << topic_cfg_.transport_name_ << " DYNAMIC | "
-                         << topic_cfg_.wire_name_ << " | "
-                         << topic_cfg_.max_freq_ << "Hz");
-    }
     sub_last_time_ = ros::Time(0);
-    sub_ = topicSubscriber(topic_cfg_.name_, topic_cfg_.type_, nh_public);
-  } else {
-    pub_ = topicPublisher(topic_cfg_.name_, topic_cfg_.type_, nh_public);
+    sub_ = nh_public_->subscribe<
+        const ros::MessageEvent<topic_tools::ShapeShifter const>&>(
+        topic_cfg_.name_, SUB_QUEUE_SIZE, &TopicFactory::shapeShifterCallback,
+        this, ros::TransportHints().tcpNoDelay());
+    INFO_MSG(" DISCOVER " << topic_cfg_.name_ << " | " << topic_cfg_.max_freq_
+                           << "Hz");
   }
 }
 
 TopicFactory::~TopicFactory() { stopThread(); }
 
-ros::Subscriber TopicFactory::topicSubscriber(
-    const std::string& topic_name,
-    const std::string& msg_type,
-    const std::shared_ptr<ros::NodeHandle>& nh) {
-#define X(type, classname)                 \
-  if (msg_type == type) {                 \
-    return nh_sub<classname>(topic_name, nh); \
-  }
-  MSGS_MACRO
-#undef X
-  throw std::invalid_argument("Invalid ROS message type: " + msg_type);
-}
-
-template <typename T>
-void TopicFactory::subCallback(const ros::MessageEvent<const T>& event) {
+void TopicFactory::shapeShifterCallback(
+    const ros::MessageEvent<const topic_tools::ShapeShifter>& event) {
   if (sendFreqControl()) {
     return;
   }
 
-  const T& msg = *event.getConstMessage();
+  const topic_tools::ShapeShifter& shape = *event.getConstMessage();
+  bool latching = false;
+  const auto connection_header = event.getConnectionHeaderPtr();
+  if (connection_header != nullptr) {
+    const auto item = connection_header->find("latching");
+    latching = item != connection_header->end() && item->second == "1";
+  }
+  std::string schema_error;
+  if (!configureSenderSchema(shape, latching, &schema_error)) {
+    ROS_ERROR_STREAM_THROTTLE(
+        1.0, "[TopicFactory] schema rejected for " << topic_cfg_.name_ << ": "
+                                                     << schema_error);
+    if (schemaConflict()) {
+      applySchemaQuarantine(schema_error);
+    }
+    recordDrop();
+    return;
+  }
+  if (schemaConflict(&schema_error)) {
+    applySchemaQuarantine(schema_error);
+    ROS_ERROR_STREAM_THROTTLE(
+        1.0, "[TopicFactory] quarantined " << topic_cfg_.wire_name_ << ": "
+                                            << schema_error);
+    recordDrop();
+    return;
+  }
+
+  swarm_ros_bridge::transport::TopicSchema schema;
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    schema = schema_;
+  }
   swarm_ros_bridge::transport::TransportEnvelope envelope;
   envelope.payload_kind = swarm_ros_bridge::transport::PayloadKind::kRosSerialized;
   envelope.sequence = sequence_.fetch_add(1U) + 1U;
   envelope.source_host = topic_cfg_.my_hostname_;
-  envelope.ros_type = topic_cfg_.type_;
-  envelope.ros_md5 = RosTypeMd5(topic_cfg_.type_);
-
-  if constexpr (has_data_header<T, std_msgs::Header>::value) {
-    envelope.source_time_ns = RosTimeToNs(msg.header.stamp);
-    envelope.source_header_sequence = msg.header.seq;
-    envelope.frame_id = msg.header.frame_id;
-  } else {
-    envelope.source_time_ns = RosTimeToNs(ros::Time::now());
-  }
+  swarm_ros_bridge::transport::SetEnvelopeTopicSchema(schema, false, &envelope);
+  envelope.source_time_ns = RosTimeToNs(ros::Time::now());
 
   try {
-    if constexpr (std::is_same<T, nav_msgs::Odometry>::value) {
+    if (schema.ros_type == "nav_msgs/Odometry") {
+      const auto typed = shape.instantiate<nav_msgs::Odometry>();
+      envelope.source_time_ns = RosTimeToNs(typed->header.stamp);
+      envelope.source_header_sequence = typed->header.seq;
+      envelope.frame_id = typed->header.frame_id;
       geometry_msgs::PoseStamped pose;
-      pose.header = msg.header;
-      pose.header.frame_id = msg.child_frame_id;
-      pose.pose = msg.pose.pose;
+      pose.header = typed->header;
+      pose.header.frame_id = typed->child_frame_id;
+      pose.pose = typed->pose.pose;
       envelope.payload = SerializeRosMessage(pose);
-    } else if constexpr (std::is_same<T, sensor_msgs::Image>::value) {
-      const sensor_msgs::ImageConstPtr image_msg = event.getConstMessage();
+    } else if (schema.ros_type == "sensor_msgs/Image") {
+      const auto image_msg = shape.instantiate<sensor_msgs::Image>();
+      envelope.source_time_ns = RosTimeToNs(image_msg->header.stamp);
+      envelope.source_header_sequence = image_msg->header.seq;
+      envelope.frame_id = image_msg->header.frame_id;
       cv_bridge::CvImageConstPtr cv_ptr;
       if (image_msg->encoding == sensor_msgs::image_encodings::BGR8) {
         cv_ptr = cv_bridge::toCvShare(image_msg, sensor_msgs::image_encodings::BGR8);
@@ -187,14 +241,18 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T>& event) {
         throw std::runtime_error("JPEG encode failed");
       }
       envelope.payload_kind = swarm_ros_bridge::transport::PayloadKind::kJpeg;
-    } else if constexpr (std::is_same<T, sensor_msgs::PointCloud2>::value) {
-      ptCloudProcess(msg, &envelope.payload);
+    } else if (schema.ros_type == "sensor_msgs/PointCloud2") {
+      const auto typed = shape.instantiate<sensor_msgs::PointCloud2>();
+      envelope.source_time_ns = RosTimeToNs(typed->header.stamp);
+      envelope.source_header_sequence = typed->header.seq;
+      envelope.frame_id = typed->header.frame_id;
+      ptCloudProcess(*typed, &envelope.payload);
       if (topic_cfg_.cloud_compress_) {
         envelope.payload_kind =
             swarm_ros_bridge::transport::PayloadKind::kPointCloudCompressed;
       }
     } else {
-      envelope.payload = SerializeRosMessage(msg);
+      envelope.payload = SerializeRosMessage(shape);
     }
   } catch (const std::exception& exception) {
     ROS_ERROR_STREAM("[TopicFactory] failed to encode " << topic_cfg_.name_ << ": "
@@ -203,9 +261,10 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T>& event) {
     return;
   }
 
-  if constexpr (has_data_to_drone_ids<T, std::vector<uint8_t>>::value) {
-    for (const std::uint8_t id : msg.to_drone_ids) {
-      const std::string target = "drone" + std::to_string(id);
+  std::vector<std::string> destinations;
+  const bool dynamic = extractDynamicDestinations(shape, &destinations);
+  if (dynamic) {
+    for (const std::string& target : destinations) {
       const auto publisher = dynamic_senders_.find(target);
       if (publisher == dynamic_senders_.end()) {
         INFO_MSG_RED("[TopicFactory] to_drone_ids not configured: " << target);
@@ -229,6 +288,393 @@ void TopicFactory::subCallback(const ros::MessageEvent<const T>& event) {
       recordDrop();
     }
   }
+}
+
+bool TopicFactory::configureSenderSchema(
+    const topic_tools::ShapeShifter& message,
+    bool latching,
+    std::string* error) {
+  swarm_ros_bridge::transport::TopicSchema candidate;
+  candidate.ros_type = message.getDataType();
+  candidate.ros_md5 = message.getMD5Sum();
+  candidate.ros_definition = message.getMessageDefinition();
+  candidate.latching = latching;
+  candidate.wire_codec = WireCodecForTopic(topic_cfg_, candidate.ros_type);
+  std::vector<std::string> unused_destinations;
+  candidate.routing_mode =
+      extractDynamicDestinations(message, &unused_destinations)
+          ? "to_drone_ids"
+          : "fanout";
+
+  const std::string compiled_md5 = RosTypeMd5(candidate.ros_type);
+  if (!compiled_md5.empty() && compiled_md5 != candidate.ros_md5) {
+    const std::string value = "local compiled MD5 does not match publisher for " +
+                              candidate.ros_type;
+    schema_registry_->MarkConflict(topic_cfg_.rule_id_, value);
+    if (error != nullptr) {
+      *error = value;
+    }
+    return false;
+  }
+
+  std::string registry_error;
+  if (!schema_registry_->Register(topic_cfg_.rule_id_, topic_cfg_.my_hostname_,
+                                  candidate, &registry_error)) {
+    if (error != nullptr) {
+      *error = registry_error;
+    }
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    if (schema_ready_) {
+      std::string compatibility_error;
+      if (!swarm_ros_bridge::transport::TopicSchemasCompatible(
+              schema_, candidate, &compatibility_error)) {
+        schema_registry_->MarkConflict(topic_cfg_.rule_id_, compatibility_error);
+        if (error != nullptr) {
+          *error = compatibility_error;
+        }
+        return false;
+      }
+      return true;
+    }
+    schema_ = candidate;
+    schema_ready_ = true;
+  }
+
+  try {
+    active_transport_ = transportForSchema(candidate);
+    if (candidate.routing_mode == "to_drone_ids") {
+      for (const auto& destination : topic_cfg_.dst_hostname_map_) {
+        if (!destination.second || destination.first == topic_cfg_.my_hostname_) {
+          continue;
+        }
+        const std::string key = swarm_ros_bridge::transport::TopicDirectedKey(
+            topic_cfg_.src_hostname_, destination.first, topic_cfg_.wire_name_);
+        dynamic_senders_[destination.first] =
+            active_transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
+      }
+    } else {
+      const std::string key = swarm_ros_bridge::transport::TopicFanoutKey(
+          topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
+      sender_ = active_transport_->DeclarePublisher(key, topic_cfg_.qos_class_);
+    }
+
+    const std::string schema_key = swarm_ros_bridge::transport::TopicSchemaKey(
+        topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
+    schema_queryable_ = transports_.control->DeclareQueryable(
+        schema_key,
+        [this](const swarm_ros_bridge::transport::TransportEnvelope& request,
+               swarm_ros_bridge::transport::TransportEnvelope* response,
+               std::string* query_error) {
+          return handleSchemaQuery(request, response, query_error);
+        });
+    schema_publisher_ = transports_.control->DeclarePublisher(
+        schema_key, swarm_ros_bridge::transport::QosClass::kCommand);
+    swarm_ros_bridge::transport::TransportEnvelope announcement;
+    announcement.payload_kind =
+        swarm_ros_bridge::transport::PayloadKind::kTopicSchemaResponse;
+    announcement.source_host = topic_cfg_.my_hostname_;
+    swarm_ros_bridge::transport::SetEnvelopeTopicSchema(candidate, true,
+                                                         &announcement);
+    std::string publish_error;
+    if (!schema_publisher_->Publish(announcement, &publish_error)) {
+      ROS_WARN_STREAM("[TopicFactory] schema announcement failed for "
+                      << topic_cfg_.wire_name_ << ": " << publish_error);
+    }
+  } catch (const std::exception& exception) {
+    schema_registry_->MarkConflict(topic_cfg_.rule_id_, exception.what());
+    if (error != nullptr) {
+      *error = exception.what();
+    }
+    return false;
+  }
+
+  updateSchemaMetrics(candidate);
+  INFO_MSG(" SCHEMA " << candidate.ros_type << " | " << candidate.ros_md5
+                       << " | " << candidate.wire_codec << " | "
+                       << candidate.routing_mode);
+  return true;
+}
+
+bool TopicFactory::configureReceiverSchema(
+    const swarm_ros_bridge::transport::TopicSchema& candidate,
+    std::string* error) {
+  if (candidate.routing_mode == "to_drone_ids" &&
+      topic_cfg_.directed_name_.empty()) {
+    const std::string value =
+        "directed {id} topic requires a drone destination hostname";
+    schema_registry_->MarkConflict(topic_cfg_.rule_id_, value);
+    if (error != nullptr) {
+      *error = value;
+    }
+    return false;
+  }
+  const std::string compiled_md5 = RosTypeMd5(candidate.ros_type);
+  if (!compiled_md5.empty() && compiled_md5 != candidate.ros_md5) {
+    const std::string value = "local compiled MD5 does not match remote schema for " +
+                              candidate.ros_type;
+    schema_registry_->MarkConflict(topic_cfg_.rule_id_, value);
+    if (error != nullptr) {
+      *error = value;
+    }
+    return false;
+  }
+  std::string registry_error;
+  if (!schema_registry_->Register(topic_cfg_.rule_id_, topic_cfg_.src_hostname_,
+                                  candidate, &registry_error)) {
+    if (error != nullptr) {
+      *error = registry_error;
+    }
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    if (schema_ready_) {
+      std::string compatibility_error;
+      if (!swarm_ros_bridge::transport::TopicSchemasCompatible(
+              schema_, candidate, &compatibility_error)) {
+        schema_registry_->MarkConflict(topic_cfg_.rule_id_, compatibility_error);
+        if (error != nullptr) {
+          *error = compatibility_error;
+        }
+        return false;
+      }
+      return true;
+    }
+  }
+
+  const std::string output_name =
+      candidate.routing_mode == "to_drone_ids" &&
+              !topic_cfg_.directed_name_.empty()
+          ? topic_cfg_.directed_name_
+          : topic_cfg_.fanout_name_;
+  try {
+    ros::Publisher publisher = advertiseForSchema(candidate, output_name);
+    {
+      std::lock_guard<std::mutex> lock(schema_mutex_);
+      schema_ = candidate;
+      schema_ready_ = true;
+      topic_cfg_.name_ = output_name;
+      pub_ = std::move(publisher);
+    }
+  } catch (const std::exception& exception) {
+    schema_registry_->MarkConflict(topic_cfg_.rule_id_, exception.what());
+    if (error != nullptr) {
+      *error = exception.what();
+    }
+    return false;
+  }
+  active_transport_ = transportForSchema(candidate);
+  updateSchemaMetrics(candidate);
+  recv_condition_.notify_all();
+  INFO_MSG(" READY " << candidate.ros_type << " | " << topic_cfg_.src_hostname_
+                      << " -> " << output_name);
+  return true;
+}
+
+bool TopicFactory::handleSchemaQuery(
+    const swarm_ros_bridge::transport::TransportEnvelope& request,
+    swarm_ros_bridge::transport::TransportEnvelope* response,
+    std::string* error) {
+  if (response == nullptr ||
+      request.payload_kind !=
+          swarm_ros_bridge::transport::PayloadKind::kTopicSchemaRequest) {
+    if (error != nullptr) {
+      *error = "invalid topic schema request";
+    }
+    return false;
+  }
+  const auto destination = topic_cfg_.dst_hostname_map_.find(request.source_host);
+  if (destination == topic_cfg_.dst_hostname_map_.end() || !destination->second) {
+    if (error != nullptr) {
+      *error = "schema requester is not a configured destination";
+    }
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(schema_mutex_);
+  if (!schema_ready_) {
+    if (error != nullptr) {
+      *error = "topic schema has not been discovered";
+    }
+    return false;
+  }
+  response->payload_kind =
+      swarm_ros_bridge::transport::PayloadKind::kTopicSchemaResponse;
+  response->sequence = request.sequence;
+  response->source_host = topic_cfg_.my_hostname_;
+  swarm_ros_bridge::transport::SetEnvelopeTopicSchema(schema_, true, response);
+  return true;
+}
+
+void TopicFactory::handleSchemaAnnouncement(
+    swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
+  if (envelope.payload_kind !=
+          swarm_ros_bridge::transport::PayloadKind::kTopicSchemaResponse ||
+      envelope.source_host != topic_cfg_.src_hostname_) {
+    return;
+  }
+  std::string error;
+  if (!configureReceiverSchema(
+          swarm_ros_bridge::transport::TopicSchemaFromEnvelope(envelope),
+          &error)) {
+    if (schemaConflict()) {
+      applySchemaQuarantine(error);
+    }
+    ROS_ERROR_STREAM_THROTTLE(1.0, "[TopicFactory] schema announcement rejected: "
+                                      << error);
+  }
+}
+
+void TopicFactory::schemaResolveFunction() {
+  const std::string key = swarm_ros_bridge::transport::TopicSchemaKey(
+      topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
+  while (recv_thread_flag_.load()) {
+    std::string conflict_error;
+    if (schemaConflict(&conflict_error)) {
+      applySchemaQuarantine(conflict_error);
+    } else {
+      swarm_ros_bridge::transport::TransportEnvelope request;
+      request.payload_kind =
+          swarm_ros_bridge::transport::PayloadKind::kTopicSchemaRequest;
+      request.sequence = sequence_.fetch_add(1U) + 1U;
+      request.source_host = topic_cfg_.my_hostname_;
+      swarm_ros_bridge::transport::TransportEnvelope response;
+      std::string query_error;
+      if (transports_.control->Query(key, request, 500U, &response,
+                                     &query_error) &&
+          response.payload_kind ==
+              swarm_ros_bridge::transport::PayloadKind::kTopicSchemaResponse &&
+          response.source_host == topic_cfg_.src_hostname_) {
+        std::string schema_error;
+        if (!configureReceiverSchema(
+                swarm_ros_bridge::transport::TopicSchemaFromEnvelope(response),
+                &schema_error)) {
+          if (schemaConflict()) {
+            applySchemaQuarantine(schema_error);
+          }
+          ROS_ERROR_STREAM_THROTTLE(
+              1.0, "[TopicFactory] schema query rejected for "
+                       << topic_cfg_.wire_name_ << ": " << schema_error);
+        }
+      }
+    }
+    std::unique_lock<std::mutex> lock(schema_wait_mutex_);
+    schema_condition_.wait_for(lock, std::chrono::milliseconds(500), [this]() {
+      return !recv_thread_flag_.load();
+    });
+  }
+}
+
+bool TopicFactory::schemaConflict(std::string* error) const {
+  const auto status = schema_registry_->GetStatus(topic_cfg_.rule_id_);
+  if (status.state !=
+      swarm_ros_bridge::transport::TopicSchemaState::kConflict) {
+    return false;
+  }
+  if (error != nullptr) {
+    *error = status.error;
+  }
+  return true;
+}
+
+void TopicFactory::applySchemaQuarantine(const std::string& error) {
+  std::size_t queued = 0U;
+  {
+    std::lock_guard<std::mutex> lock(recv_mutex_);
+    queued = recv_queue_.size();
+    recv_queue_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    schema_ready_ = false;
+  }
+  if (send_or_recv_ == SEND) {
+    sub_.shutdown();
+    sender_.reset();
+    dynamic_senders_.clear();
+    schema_publisher_.reset();
+    schema_queryable_.reset();
+  } else {
+    pub_.shutdown();
+  }
+  {
+    std::lock_guard<std::mutex> lock(metrics_mutex_);
+    metrics_state_.schema_state = "conflict";
+    metrics_state_.schema_error = error;
+    metrics_state_.dropped_messages += queued;
+    metrics_state_.transport_queue_drops += queued;
+  }
+  recv_condition_.notify_all();
+}
+
+std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport>
+TopicFactory::transportForSchema(
+    const swarm_ros_bridge::transport::TopicSchema& schema) const {
+  if (schema.ros_type == "sensor_msgs/Image" && transports_.image != nullptr) {
+    return transports_.image;
+  }
+  if (schema.ros_type == "sensor_msgs/PointCloud2" &&
+      transports_.cloud != nullptr) {
+    return transports_.cloud;
+  }
+  return transports_.control;
+}
+
+ros::Publisher TopicFactory::advertiseForSchema(
+    const swarm_ros_bridge::transport::TopicSchema& schema,
+    const std::string& topic_name) const {
+#define X(type, classname)                                                   \
+  if (schema.ros_type == type) {                                             \
+    return AdvertisePreservingHeader<classname>(topic_name, nh_public_,      \
+                                                 schema.latching);           \
+  }
+  SPECIALIZED_MSGS_MACRO
+#undef X
+  topic_tools::ShapeShifter prototype;
+  prototype.morph(schema.ros_md5, schema.ros_type, schema.ros_definition,
+                  schema.latching ? "1" : "0");
+  return prototype.advertise(*nh_public_, topic_name, PUB_QUEUE_SIZE,
+                             schema.latching);
+}
+
+bool TopicFactory::extractDynamicDestinations(
+    const topic_tools::ShapeShifter& message,
+    std::vector<std::string>* destinations) const {
+  if (destinations == nullptr) {
+    return false;
+  }
+  destinations->clear();
+#define X(type, classname)                                                   \
+  if (message.getDataType() == type) {                                       \
+    return ExtractRegisteredDestinations<classname>(message, destinations);  \
+  }
+  MSGS_MACRO
+#undef X
+  return false;
+}
+
+void TopicFactory::updateSchemaMetrics(
+    const swarm_ros_bridge::transport::TopicSchema& schema) {
+  std::lock_guard<std::mutex> lock(metrics_mutex_);
+  metrics_state_.topic_name = topic_cfg_.name_;
+  metrics_state_.msg_type = schema.ros_type;
+  metrics_state_.codec = schema.wire_codec;
+  metrics_state_.transport =
+      schema.ros_type == "sensor_msgs/Image" && transports_.image != nullptr
+          ? "zenoh-udp"
+          : (schema.ros_type == "sensor_msgs/PointCloud2" &&
+                     transports_.cloud != nullptr
+                 ? "zenoh-cloud-tcp"
+                 : (transports_.image != nullptr || transports_.cloud != nullptr
+                        ? "zenoh-tcp"
+                        : "zenoh"));
+  metrics_state_.schema_state = "ready";
+  metrics_state_.schema_md5 = schema.ros_md5;
+  metrics_state_.schema_error.clear();
 }
 
 template <typename T>
@@ -296,15 +742,6 @@ void TopicFactory::ptCloudProcess(const T& msg, std::vector<std::uint8_t>* data)
   *data = SerializeRosMessage(compressed);
 }
 
-template <typename T>
-ros::Subscriber TopicFactory::nh_sub(
-    const std::string& topic_name,
-    const std::shared_ptr<ros::NodeHandle>& nh) {
-  return nh->subscribe<const ros::MessageEvent<T const>&>(
-      topic_name, SUB_QUEUE_SIZE, &TopicFactory::subCallback<T>, this,
-      ros::TransportHints().tcpNoDelay());
-}
-
 bool TopicFactory::sendFreqControl() {
   const ros::Time now = ros::Time::now();
   if (std::fabs(topic_cfg_.max_freq_ - (-1.0)) <
@@ -321,28 +758,43 @@ bool TopicFactory::sendFreqControl() {
   return false;
 }
 
-ros::Publisher TopicFactory::topicPublisher(
-    const std::string& topic_name,
-    const std::string& msg_type,
-    const std::shared_ptr<ros::NodeHandle>& nh) {
-#define X(type, classname)                     \
-  if (msg_type == type) {                     \
-    return AdvertisePreservingHeader<classname>(topic_name, nh); \
-  }
-  MSGS_MACRO
-#undef X
-  throw std::invalid_argument("Invalid ROS message type: " + msg_type);
-}
-
 void TopicFactory::deserializePublish(
     const swarm_ros_bridge::transport::TransportEnvelope& envelope) {
+  swarm_ros_bridge::transport::TopicSchema schema;
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    if (!schema_ready_) {
+      throw std::runtime_error("topic schema is not ready");
+    }
+    schema = schema_;
+  }
+  std::string metadata_error;
+  if (!swarm_ros_bridge::transport::ValidateEnvelopeMetadata(
+          envelope, schema.ros_type, schema.ros_md5, &metadata_error)) {
+    throw std::runtime_error(metadata_error);
+  }
+  if (envelope.wire_codec != schema.wire_codec ||
+      envelope.routing_mode != schema.routing_mode) {
+    throw std::runtime_error("topic wire contract mismatch");
+  }
+  if (envelope.payload_kind != ExpectedPayloadKind(schema.wire_codec)) {
+    throw std::runtime_error("topic payload kind does not match wire codec");
+  }
 #define X(type, classname)                 \
-  if (topic_cfg_.type_ == type) {          \
+  if (schema.ros_type == type) {            \
     return deserializePub<classname>(envelope); \
   }
-  MSGS_MACRO
+  SPECIALIZED_MSGS_MACRO
 #undef X
-  throw std::invalid_argument("Invalid ROS message type: " + topic_cfg_.type_);
+  topic_tools::ShapeShifter message;
+  message.morph(schema.ros_md5, schema.ros_type, schema.ros_definition,
+                schema.latching ? "1" : "0");
+  ros::serialization::IStream stream(
+      const_cast<std::uint8_t*>(envelope.payload.data()),
+      envelope.payload.size());
+  ros::serialization::deserialize(stream, message);
+  pub_.publish(message);
+  recordReceive(envelope.payload.size(), inferLatencyMs(envelope.source_time_ns));
 }
 
 template <typename T>
@@ -378,7 +830,8 @@ void TopicFactory::deserializePub(
       msg.child_frame_id = pose.header.frame_id;
       msg.pose.pose = pose.pose;
     } else if constexpr (std::is_same<T, sensor_msgs::PointCloud2>::value) {
-      if (topic_cfg_.cloud_compress_) {
+      if (envelope.wire_codec == "pointcloud_draco" ||
+          envelope.wire_codec == "pointcloud_pcl_octree") {
         swarm_ros_bridge::PtCloudCompress compressed;
         ros::serialization::deserialize(stream, compressed);
         if (compressed.codec == "draco") {
@@ -432,30 +885,7 @@ void TopicFactory::deserializePub(
 
 void TopicFactory::enqueueEnvelope(
     swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
-  const auto expected_payload_kind =
-      topic_cfg_.type_ == "sensor_msgs/Image"
-          ? swarm_ros_bridge::transport::PayloadKind::kJpeg
-          : (topic_cfg_.type_ == "sensor_msgs/PointCloud2" &&
-                     topic_cfg_.cloud_compress_
-                 ? swarm_ros_bridge::transport::PayloadKind::kPointCloudCompressed
-                 : swarm_ros_bridge::transport::PayloadKind::kRosSerialized);
-  if (envelope.payload_kind != expected_payload_kind) {
-    ROS_ERROR_STREAM_THROTTLE(
-        1.0, "[TopicFactory] rejected payload kind for " << topic_cfg_.name_);
-    recordDrop();
-    return;
-  }
-  std::string metadata_error;
-  if (!swarm_ros_bridge::transport::ValidateEnvelopeMetadata(
-          envelope, topic_cfg_.type_, RosTypeMd5(topic_cfg_.type_),
-          &metadata_error)) {
-    ROS_ERROR_STREAM_THROTTLE(
-        1.0, "[TopicFactory] rejected envelope for " << topic_cfg_.name_ << ": "
-                                                       << metadata_error);
-    recordDrop();
-    return;
-  }
-  if (!topic_cfg_.dynamic_dst_ && envelope.source_host != topic_cfg_.src_hostname_) {
+  if (envelope.source_host != topic_cfg_.src_hostname_) {
     recordDrop();
     return;
   }
@@ -465,7 +895,44 @@ void TopicFactory::enqueueEnvelope(
     return;
   }
 
-  if (topic_cfg_.type_ == "sensor_msgs/Image") {
+  std::string conflict_error;
+  if (schemaConflict(&conflict_error)) {
+    applySchemaQuarantine(conflict_error);
+    ROS_ERROR_STREAM_THROTTLE(1.0, "[TopicFactory] dropped quarantined topic "
+                                      << topic_cfg_.wire_name_ << ": "
+                                      << conflict_error);
+    recordDrop();
+    return;
+  }
+
+  swarm_ros_bridge::transport::TopicSchema schema;
+  bool ready = false;
+  {
+    std::lock_guard<std::mutex> lock(schema_mutex_);
+    ready = schema_ready_;
+    if (ready) {
+      schema = schema_;
+    }
+  }
+  if (ready) {
+    std::string metadata_error;
+    if (!swarm_ros_bridge::transport::ValidateEnvelopeMetadata(
+            envelope, schema.ros_type, schema.ros_md5, &metadata_error) ||
+        envelope.wire_codec != schema.wire_codec ||
+        envelope.routing_mode != schema.routing_mode ||
+        envelope.payload_kind != ExpectedPayloadKind(schema.wire_codec)) {
+      ROS_ERROR_STREAM_THROTTLE(
+          1.0, "[TopicFactory] rejected envelope for " << topic_cfg_.name_
+                                                        << ": "
+                                                        << (metadata_error.empty()
+                                                                ? "wire contract mismatch"
+                                                                : metadata_error));
+      recordDrop();
+      return;
+    }
+  }
+
+  if (ready && schema.ros_type == "sensor_msgs/Image") {
     recordCompleteImageEnvelope(envelope.sequence);
   }
 
@@ -496,13 +963,23 @@ void TopicFactory::recvFunction() {
     {
       std::unique_lock<std::mutex> lock(recv_mutex_);
       recv_condition_.wait(lock, [this]() {
-        return !recv_thread_flag_.load() || !recv_queue_.empty();
+        bool ready = false;
+        {
+          std::lock_guard<std::mutex> schema_lock(schema_mutex_);
+          ready = schema_ready_;
+        }
+        return !recv_thread_flag_.load() ||
+               (!recv_queue_.empty() && (ready || schemaConflict()));
       });
       if (!recv_thread_flag_.load() && recv_queue_.empty()) {
         return;
       }
       envelope = std::move(recv_queue_.front());
       recv_queue_.pop_front();
+    }
+    if (schemaConflict()) {
+      recordDrop();
+      continue;
     }
     try {
       deserializePublish(envelope);
@@ -514,11 +991,22 @@ void TopicFactory::recvFunction() {
   }
 }
 
-swarm_ros_bridge::diagnostics::TopicMetrics TopicFactory::GetMetricsSnapshot() const {
+swarm_ros_bridge::diagnostics::TopicMetrics TopicFactory::GetMetricsSnapshot() {
+  const auto schema_status = schema_registry_->GetStatus(topic_cfg_.rule_id_);
+  if (schema_status.state ==
+      swarm_ros_bridge::transport::TopicSchemaState::kConflict) {
+    applySchemaQuarantine(schema_status.error);
+  }
   std::lock_guard<std::mutex> lock(metrics_mutex_);
   const ros::Time now = ros::Time::now();
-  const_cast<TopicFactory*>(this)->pruneMetricsWindowLocked(now);
-  return swarm_ros_bridge::diagnostics::MakeTopicMetrics(metrics_state_, now);
+  pruneMetricsWindowLocked(now);
+  auto state = metrics_state_;
+  if (schema_status.state ==
+      swarm_ros_bridge::transport::TopicSchemaState::kConflict) {
+    state.schema_state = "conflict";
+    state.schema_error = schema_status.error;
+  }
+  return swarm_ros_bridge::diagnostics::MakeTopicMetrics(state, now);
 }
 
 int TopicFactory::currentImageJpegQuality() const {
@@ -590,7 +1078,7 @@ void TopicFactory::pruneMetricsWindowLocked(const ros::Time& now) {
 }
 
 void TopicFactory::maybeAdaptImageQualityLocked(const ros::Time& now) {
-  if (topic_cfg_.type_ != "sensor_msgs/Image" ||
+  if (metrics_state_.msg_type != "sensor_msgs/Image" ||
       !metrics_state_.adaptive_quality_enabled ||
       metrics_state_.target_bandwidth_kbps <= 0.0 ||
       metrics_state_.recent_send_bytes.size() < 2 ||
@@ -660,21 +1148,50 @@ void TopicFactory::createThread() {
     return;
   }
   recv_thread_ = std::thread(&TopicFactory::recvFunction, this);
-  const std::string key = topic_cfg_.dynamic_dst_
-                              ? swarm_ros_bridge::transport::TopicDirectedKey(
-                                    "*", topic_cfg_.my_hostname_, topic_cfg_.wire_name_)
-                              : swarm_ros_bridge::transport::TopicFanoutKey(
-                                    topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
   try {
-    subscription_ = transport_->Subscribe(
-        key, [this](swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
-          enqueueEnvelope(std::move(envelope));
+    std::vector<std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport>>
+        candidate_transports;
+    candidate_transports.push_back(transports_.control);
+    if (transports_.image != nullptr &&
+        transports_.image != transports_.control) {
+      candidate_transports.push_back(transports_.image);
+    }
+    if (transports_.cloud != nullptr && transports_.cloud != transports_.control &&
+        transports_.cloud != transports_.image) {
+      candidate_transports.push_back(transports_.cloud);
+    }
+    const std::vector<std::string> keys{
+        swarm_ros_bridge::transport::TopicFanoutKey(
+            topic_cfg_.src_hostname_, topic_cfg_.wire_name_),
+        swarm_ros_bridge::transport::TopicDirectedKey(
+            topic_cfg_.src_hostname_, topic_cfg_.my_hostname_,
+            topic_cfg_.wire_name_)};
+    for (const auto& transport : candidate_transports) {
+      for (const std::string& key : keys) {
+        subscriptions_.push_back(transport->Subscribe(
+            key,
+            [this](swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
+              enqueueEnvelope(std::move(envelope));
+            }));
+      }
+    }
+    const std::string schema_key = swarm_ros_bridge::transport::TopicSchemaKey(
+        topic_cfg_.src_hostname_, topic_cfg_.wire_name_);
+    schema_subscription_ = transports_.control->Subscribe(
+        schema_key,
+        [this](swarm_ros_bridge::transport::TransportEnvelope&& envelope) {
+          handleSchemaAnnouncement(std::move(envelope));
         });
-    INFO_MSG(" RECV " << topic_cfg_.transport_name_ << " | " << key
-                       << " -> " << topic_cfg_.name_);
+    schema_thread_ = std::thread(&TopicFactory::schemaResolveFunction, this);
+    INFO_MSG(" WAIT SCHEMA | " << schema_key << " -> "
+                                << topic_cfg_.fanout_name_);
   } catch (...) {
     recv_thread_flag_.store(false);
     recv_condition_.notify_all();
+    schema_condition_.notify_all();
+    if (schema_thread_.joinable()) {
+      schema_thread_.join();
+    }
     if (recv_thread_.joinable()) {
       recv_thread_.join();
     }
@@ -687,11 +1204,18 @@ void TopicFactory::stopThread() {
     sub_.shutdown();
     dynamic_senders_.clear();
     sender_.reset();
+    schema_publisher_.reset();
+    schema_queryable_.reset();
     return;
   }
-  subscription_.reset();
+  schema_subscription_.reset();
+  subscriptions_.clear();
   if (recv_thread_flag_.exchange(false)) {
     recv_condition_.notify_all();
+    schema_condition_.notify_all();
+    if (schema_thread_.joinable()) {
+      schema_thread_.join();
+    }
     if (recv_thread_.joinable()) {
       recv_thread_.join();
     }

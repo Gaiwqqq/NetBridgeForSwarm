@@ -44,6 +44,7 @@ NetBridgeForSwarm 是一个运行在 ROS1 Noetic 节点旁的通信桥。每台�
 - 通过 `srcIP`/`dstIP` 白名单进行一对一、一对多、多对一和全机路由。
 - 三条相互隔离的 Zenoh Session：控制/状态/Service 走 TCP，图像走 UDP，点云走独立 TCP。
 - `command`、`state`、`bulk` 三类 Topic QoS，分别匹配可靠性、优先级和拥塞策略。
+- Topic 仅配置名称，Bridge 从 ROS1 连接头自动发现类型、MD5、完整定义和 latching 状态。
 - `sensor_msgs/Image` 自动转为 JPEG，可缩放并按目标带宽自适应调节质量。
 - `sensor_msgs/PointCloud2` 支持 VoxelGrid 降采样以及 Draco、PCL Octree 压缩。
 - 保留并校验 ROS type、MD5、来源主机、序号、时间戳和 `frame_id`。
@@ -84,7 +85,7 @@ flowchart LR
 | Image | `sensor_msgs/Image`，Bridge 内编码为 JPEG | UDP | 避免图像重传和拥塞影响控制链路 |
 | Cloud | `sensor_msgs/PointCloud2`，可压缩 | 独立 TCP | 可靠传输大点云，同时与控制 TCP 隔离 |
 
-Zenoh 收包回调只把已校验的 envelope 放入有界队列，ROS 反序列化和发布由独立、可停止的 worker 完成。传输协议使用版本化 `NBZ1` envelope，接收端会拒绝协议版本、ROS type 或 MD5 不一致的数据。
+Zenoh 收包回调只把已校验的 envelope 放入有界队列，ROS 反序列化和发布由独立、可停止的 worker 完成。传输协议使用版本化 `NBZ2` envelope；完整 Schema 只在 Control Session 协商，数据包只携带轻量 type/MD5/codec 元数据。
 
 ## 环境与兼容性
 
@@ -100,22 +101,20 @@ Zenoh 收包回调只把已校验的 envelope 放入有界队列，ROS 反序列
 > [!IMPORTANT]
 > 仓库中的 Zenoh `.deb` 是在 Ubuntu 20.04 原生构建的。不要把其他 Ubuntu 版本生成的包直接复制到 Focal，也不要混用其他 Zenoh 版本，否则 CMake 或运行时 ABI 可能不兼容。
 
-当前内置的消息类型：
+普通 ROS1 Topic 不再需要编译期注册。Bridge 通过 `topic_tools::ShapeShifter` 取得并转发原始 ROS 序列化字节，接收端根据远端 Schema 动态 advertise；因此接收 Bridge 本身不要求安装对应消息包。
 
-- `std_msgs/String`
-- `geometry_msgs/PoseStamped`
+以下类型有内置 wire codec 特化：
+
 - `nav_msgs/Odometry`
 - `sensor_msgs/Image`
 - `sensor_msgs/PointCloud2`
-- `visualization_msgs/Marker`
-- `visualization_msgs/MarkerArray`
 
 当前内置的 Service 类型：
 
 - `std_srvs/Empty`
 - `swarm_ros_bridge/AddTwoInts`
 
-其他类型需要在编译期注册，方法见[添加自定义消息与 Service](#添加自定义消息与-service)。
+只有 Bridge 需要读取消息字段（目前为 `to_drone_ids`）时才需注册 Topic 类型。Service 仍需编译期注册，方法见[添加自定义消息与 Service](#添加自定义消息与-service)。
 
 ## 快速开始
 
@@ -214,7 +213,6 @@ hosts:
 
 ```yaml
 - topic_name: /chatter
-  msg_type: std_msgs/String
   qos_class: state
   srcIP: [drone1]
   dstIP: [groundStation0]
@@ -339,7 +337,7 @@ sudo dpkg -i "./zenoh-debs/$(dpkg --print-architecture)"/*.deb
 
 | 文件 | 用途 | 所有节点是否应一致 |
 |---|---|---|
-| [`config/default.yaml`](swarm_ros_bridge/config/default.yaml) | 运行选项、Zenoh Session、Topic、Service | 路由与类型应一致；静态 endpoint 可按机器不同 |
+| [`config/default.yaml`](swarm_ros_bridge/config/default.yaml) | 运行选项、Zenoh Session、Topic、Service | 路由与 codec 选项应一致；静态 endpoint 可按机器不同 |
 | [`config/ip_real.yaml`](swarm_ros_bridge/config/ip_real.yaml) | 实机逻辑主机清单 | 是 |
 | [`config/default_sim.yaml`](swarm_ros_bridge/config/default_sim.yaml) | 仿真路由示例 | 同一仿真中的节点应一致 |
 | [`config/ip_sim.yaml`](swarm_ros_bridge/config/ip_sim.yaml) | 仿真主机清单 | 是 |
@@ -483,7 +481,6 @@ zenoh:
 ```yaml
 topics:
   - topic_name: /ekf_quat/ekf_odom
-    msg_type: nav_msgs/Odometry
     qos_class: state
     srcIP: [drone1]
     dstIP: [groundStation0]
@@ -495,7 +492,6 @@ topics:
 | 字段 | 必填 | 说明 |
 |---|:---:|---|
 | `topic_name` | 是 | 本地发送端订阅的 ROS Topic，必须以 `/` 开头；支持 `/drone_{id}/...` 占位符 |
-| `msg_type` | 是 | ROS 类型名，必须已在 `MSGS_MACRO` 编译注册 |
 | `qos_class` | 是 | `command`、`state` 或 `bulk`，不能为 `service` |
 | `srcIP` | 是 | 允许发送该 Topic 的逻辑主机数组，可使用 `all` / `all_drone` |
 | `dstIP` | 是 | 需要接收该 Topic 的逻辑主机数组，可使用 `all` / `all_drone` |
@@ -504,6 +500,14 @@ topics:
 | `same_prefix` | 否 | 是否统一发布到 `/bridge` 前缀，默认 `false`；为 `true` 时优先于 `prefix` |
 
 `max_freq` 只限制 Bridge 转发频率，不会修改原始发布节点的频率。超过上限的本地消息会在编码前丢弃并计入诊断。
+
+配置中若仍有旧字段 `msg_type`，Bridge 会启动失败并要求删除，避免该值被误认为校验依据。发送端尚无 ROS Publisher 时规则显示 `discovering`；首条消息完成握手后转为 `ready`。
+
+#### Schema 自动发现与一致性
+
+发送端从 ROS1 连接头读取 `datatype`、`md5sum`、`message_definition` 和 `latching`，并在 Control Session 注册 `source host + logical topic` 的 Schema。接收端先取得 Schema，再动态创建 ROS Publisher；协商期间早到的数据由现有 QoS 有界队列暂存。
+
+同一条 YAML Topic 规则下，所有来源的 `datatype + ROS MD5 + routing mode + wire codec` 必须一致。ROS MD5 已覆盖嵌套消息依赖，完整定义用于动态发布，不比较注释或空白。任一来源不一致、定义非法或运行中发生变化时，整条规则进入粘性的 `conflict` 状态：关闭该规则的 ROS Publisher、清空队列并拒绝后续数据，其他 Topic 和 Service 不受影响。修正部署后必须重启 Bridge 才能解除隔离。
 
 #### QoS 选择
 
@@ -536,7 +540,6 @@ topics:
 
 ```yaml
 - topic_name: /camera/color/image_raw
-  msg_type: sensor_msgs/Image
   qos_class: bulk
   imgResizeRate: 1.0
   imgJpegQuality: 85
@@ -572,7 +575,6 @@ topics:
 
 ```yaml
 - topic_name: /lidar/points
-  msg_type: sensor_msgs/PointCloud2
   qos_class: bulk
   cloudCompress: true
   cloudDownsample: 0.10
@@ -632,12 +634,14 @@ b: 2"
 
 1. `dstIP` 定义允许的候选目标主机。
 2. 每条消息中的 ID `N` 被映射为逻辑主机 `droneN`。
-3. 消息仅发布到对应的 `netbridge/v1/topic/<source>/dst/<target>/...` key。
+3. 消息仅发布到对应的 `netbridge/v2/topic/<source>/dst/<target>/...` key。
 4. 未出现在 `dstIP` 中的目标会被拒绝并计为 drop。
 
 这适合一条 ROS Topic 上携带不同无人机目标的命令，避免所有无人机都接收后再自行过滤。
 
 ### 添加自定义消息与 Service
+
+普通自定义 Topic 不需要修改 Bridge、`package.xml` 或 CMake；只需配置 `topic_name`，Bridge 会透明转发其 Schema 和序列化字节。只有需要读取 `to_drone_ids` 字段的消息才加入 `MSGS_MACRO`：
 
 编辑 [`swarm_ros_bridge/include/msgs_macro.hpp`](swarm_ros_bridge/include/msgs_macro.hpp)：
 
@@ -646,7 +650,6 @@ b: 2"
 #include <your_pkg/YourService.h>
 
 #define MSGS_MACRO \
-  /* 保留已有条目 */ \
   X("your_pkg/YourMessage", your_pkg::YourMessage)
 
 #define SRVS_MACRO \
@@ -654,7 +657,7 @@ b: 2"
   X("your_pkg/YourService", your_pkg::YourService)
 ```
 
-同时在 [`swarm_ros_bridge/package.xml`](swarm_ros_bridge/package.xml) 和 [`swarm_ros_bridge/CMakeLists.txt`](swarm_ros_bridge/CMakeLists.txt) 添加对应依赖，然后重新编译全部机器。所有节点必须使用相同的消息定义和 MD5。
+对字段级 Topic 特化和 Service，在 [`swarm_ros_bridge/package.xml`](swarm_ros_bridge/package.xml) 与 [`swarm_ros_bridge/CMakeLists.txt`](swarm_ros_bridge/CMakeLists.txt) 添加依赖并重新编译。普通 Topic 的接收 Bridge 不需要安装消息包，但真正订阅该 ROS Topic 的应用仍需理解相应类型。所有消息定义是否一致由运行时 ROS MD5 校验。
 
 ## 部署指南
 
@@ -788,12 +791,13 @@ TUI 节点页中的状态：
 
 | 数据 | Key 格式 |
 |---|---|
-| 广播/固定路由 Topic | `netbridge/v1/topic/<source>/fanout/<ros-topic>` |
-| `to_drone_ids` 定向 Topic | `netbridge/v1/topic/<source>/dst/<hostname>/<ros-topic>` |
-| Service | `netbridge/v1/service/<server>/<ros-service>` |
-| 节点存活 | `netbridge/v1/alive/<hostname>` |
+| 广播/固定路由 Topic | `netbridge/v2/topic/<source>/fanout/<ros-topic>` |
+| `to_drone_ids` 定向 Topic | `netbridge/v2/topic/<source>/dst/<hostname>/<ros-topic>` |
+| Topic Schema | `netbridge/v2/schema/<source>/<ros-topic>` |
+| Service | `netbridge/v2/service/<server>/<ros-service>` |
+| 节点存活 | `netbridge/v2/alive/<hostname>` |
 
-这些 key 属于内部协议。自定义 Zenoh 程序接入时必须同时实现 `NBZ1` envelope 和 ROS type/MD5 校验。
+这些 key 属于内部协议。自定义 Zenoh 程序接入时必须同时实现 `NBZ2` envelope、Schema request/response 和 ROS type/MD5 校验。`NBZ1` 与 `NBZ2` 不兼容，部署时必须同步升级所有 Bridge。
 
 ## 测试
 
@@ -808,7 +812,7 @@ TUI 节点页中的状态：
 ./devel/lib/swarm_ros_bridge/test_tui_layout
 ```
 
-三节点端到端测试会启动三个隔离的 ROS Master，模拟 `drone1 + drone2 + groundStation0`，覆盖 Odometry、Image、Draco PointCloud2 的多对一与一对多：
+三节点端到端测试会启动三个隔离的 ROS Master，模拟 `drone1 + drone2 + groundStation0`，覆盖 Odometry、Image、Draco PointCloud2，以及未加入 `MSGS_MACRO` 的自定义 `swarm_ros_bridge/NetworkInfo` 动态 Topic：
 
 ```bash
 cd ~/netbridge_ws
@@ -846,7 +850,7 @@ dpkg-query -W libzenohc libzenohc-dev libzenohcpp-dev
 2. 确认自动发现所需的组播未被 AP/VLAN/VPN 过滤。
 3. 临时关闭组播并按[固定 endpoint](#方案-b固定-endpoint)配置三条 Session。
 4. 确认防火墙同时允许 Control TCP、Image UDP 和 Cloud TCP。
-5. 检查两端规则中的 `srcIP`/`dstIP` 是否方向一致，消息类型和 MD5 是否相同。
+5. 检查两端规则中的 `srcIP`/`dstIP` 是否方向一致，并在 TUI 中确认 Schema 为 `ready`；`conflict` 会显示具体类型、MD5、路由或 codec 冲突原因。
 
 ### 图像延迟升高或丢帧
 
@@ -895,7 +899,7 @@ NetBridgeForSwarm/
 ## 安全与已知边界
 
 - 默认 UDP endpoint 未加密，不应直接暴露到公网或不可信网络。
-- Bridge 只支持编译期注册的 ROS 消息与 Service，不是任意类型的透明动态桥。
+- 普通 Topic 支持任意运行时 ROS1 消息；字段级路由特化与 Service 仍需编译期注册。
 - `state`/`bulk` 以实时性优先，BestEffort 和丢旧保新是预期行为。
 - 当前 Odometry 传输只保留 pose 子集；图像统一输出 `BGR8`；Draco XYZ 为有损量化。
 - 本项目固定 ROS Noetic、Ubuntu 20.04 与 Zenoh 1.9.0，升级任一基础组件都应重新执行完整验证。

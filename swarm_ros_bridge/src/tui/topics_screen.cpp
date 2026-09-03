@@ -42,25 +42,18 @@ std::string ShortType(const std::string& msg_type) {
 }
 
 std::string CodecLabel(const config::TopicRule& topic) {
-  if (topic.msg_type != "sensor_msgs/PointCloud2") {
-    return "-";
-  }
   return topic.cloud_codec;
 }
 
 std::string TransportLabel(const config::BridgeConfig& config,
-                           const config::TopicRule& topic) {
-  if (config.zenoh.image_session.enabled &&
-      topic.msg_type == "sensor_msgs/Image") {
-    return "Zenoh / UDP";
-  }
-  if (config.zenoh.cloud_session.enabled &&
-      topic.msg_type == "sensor_msgs/PointCloud2") {
-    return "Zenoh / dedicated TCP";
+                           const swarm_ros_bridge::NetworkInfo* live_info) {
+  if (live_info != nullptr && !live_info->transport.empty() &&
+      live_info->transport != "pending") {
+    return live_info->transport;
   }
   return config.zenoh.image_session.enabled || config.zenoh.cloud_session.enabled
-             ? "Zenoh / TCP"
-             : "Zenoh";
+             ? "Auto (schema pending)"
+             : "Zenoh (schema pending)";
 }
 
 ftxui::Element DirectionStrip(const std::string& title,
@@ -175,6 +168,10 @@ ftxui::Element TopicRowElement(const config::TopicRule& topic,
       live_info != nullptr ? live_info->bandwidth_kbps : 0.0F;
   const auto pressure_color = PressureColor(bandwidth);
   const std::string dot = PressureDot(bandwidth);
+  const std::string detected_type =
+      live_info != nullptr && !live_info->msg_type.empty()
+          ? live_info->msg_type
+          : "auto";
 
   const std::string name =
       MiddleEllipsis(topic.topic_name, static_cast<std::size_t>(
@@ -208,7 +205,7 @@ ftxui::Element TopicRowElement(const config::TopicRule& topic,
     row = hbox({
         text(dot + " ") | color(pressure_color),
         name_part | flex,
-        text(ShortType(topic.msg_type)) | color(theme::Info()) |
+        text(ShortType(detected_type)) | color(theme::Info()) |
             size(WIDTH, EQUAL, 6),
         text(FormatMetric(rate, " Hz")) | color(theme::Text()) |
             size(WIDTH, EQUAL, 9) | align_right,
@@ -271,13 +268,16 @@ ftxui::Element RenderTopicsScreen(
         diagnostics_cache->LookupDirected(aliases, "recv", &recv_info);
     const float pressure_bandwidth =
         has_live_info ? live_info.bandwidth_kbps : 0.0F;
+    const std::string detected_type =
+        has_live_info && !live_info.msg_type.empty() ? live_info.msg_type
+                                                     : "auto";
     const auto pressure_color = PressureColor(pressure_bandwidth);
 
     // -- header ---------------------------------------------------------------
     auto header = vbox({
         WrappedPath(topic.topic_name, inspector_body_width),
         hbox({
-            BadgeOutline(ShortType(topic.msg_type), theme::Info()),
+            BadgeOutline(ShortType(detected_type), theme::Info()),
             text(" "),
             BadgeOutline(EndEllipsis(topic.qos_class, 12),
                          theme::TextMuted()),
@@ -290,20 +290,45 @@ ftxui::Element RenderTopicsScreen(
 
     // -- routing / transport --------------------------------------------------
     std::vector<Element> routing_rows = {
-        InspectorField("Type", topic.msg_type, theme::Info(),
+        InspectorField("Type", detected_type, theme::Info(),
                        inspector_body_width),
+        InspectorField("Schema",
+                       has_live_info && !live_info.schema_state.empty()
+                           ? live_info.schema_state
+                           : "discovering",
+                       has_live_info && live_info.schema_state == "conflict"
+                           ? theme::Error()
+                           : theme::Info(),
+                       inspector_body_width),
+        InspectorField("Schema MD5",
+                       has_live_info && !live_info.schema_md5.empty()
+                           ? live_info.schema_md5
+                           : "--",
+                       theme::TextMuted(), inspector_body_width),
+        InspectorField("Wire codec",
+                       has_live_info && !live_info.codec.empty()
+                           ? live_info.codec
+                           : "pending",
+                       theme::Text(), inspector_body_width),
         InspectorField("Sources", JoinHosts(topic.src_hosts), theme::Text(),
                        inspector_body_width),
         InspectorField("Targets", JoinHosts(topic.dst_hosts), theme::Text(),
                        inspector_body_width),
-        InspectorField("Transport", TransportLabel(config, topic),
+        InspectorField("Transport",
+                       TransportLabel(config,
+                                      has_live_info ? &live_info : nullptr),
                        theme::Text(), inspector_body_width),
         InspectorField("Prefix", topic.prefix ? "on" : "off",
                        theme::TextMuted(), inspector_body_width),
         InspectorField("Same prefix", topic.same_prefix ? "on" : "off",
                        theme::TextMuted(), inspector_body_width),
     };
-    if (topic.msg_type == "sensor_msgs/PointCloud2") {
+    if (has_live_info && !live_info.schema_error.empty()) {
+      routing_rows.push_back(
+          InspectorField("Schema error", live_info.schema_error,
+                         theme::Error(), inspector_body_width));
+    }
+    if (detected_type == "sensor_msgs/PointCloud2") {
       routing_rows.push_back(
           InspectorField("Cloud codec", CodecLabel(topic), theme::Text(),
                          inspector_body_width));
@@ -319,7 +344,7 @@ ftxui::Element RenderTopicsScreen(
 
     // -- image quality --------------------------------------------------------
     std::vector<Element> image_rows;
-    if (topic.msg_type == "sensor_msgs/Image") {
+    if (detected_type == "sensor_msgs/Image") {
       std::ostringstream resize_stream;
       resize_stream.setf(std::ios::fixed);
       resize_stream.precision(2);

@@ -4,6 +4,9 @@ string direction
 string codec
 string transport
 string qos_class
+string schema_state
+string schema_md5
+string schema_error
 float32 configured_rate_hz
 float32 send_rate_hz
 float32 recv_rate_hz

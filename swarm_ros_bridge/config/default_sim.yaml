@@ -50,7 +50,6 @@ services:
 topics:
   # ---------- Topics ---------- #
   - topic_name: /drone_0_ego_planner_node/rc_ctrl_marker
-    msg_type: visualization_msgs/MarkerArray
     qos_class: bulk
     srcIP:
       - drone1
@@ -62,7 +61,6 @@ topics:
     same_prefix: true
 
   - topic_name: /drone_0_ego_planner_node/grid_map/occupancy_inflate
-    msg_type: sensor_msgs/PointCloud2
     qos_class: bulk
     srcIP:
       - drone1
@@ -74,7 +72,6 @@ topics:
     same_prefix: true
 
   - topic_name: /drone_0_ego_planner_node/grid_map/occupancy
-    msg_type: sensor_msgs/PointCloud2
     qos_class: bulk
     srcIP:
       - drone1
@@ -86,7 +83,6 @@ topics:
     same_prefix: true
 
   - topic_name: /ekf_quat/ekf_odom
-    msg_type: nav_msgs/Odometry
     qos_class: state
     srcIP:
       - drone1
@@ -98,7 +94,6 @@ topics:
     same_prefix: true
 
   - topic_name: /camera/color/image_raw
-    msg_type: sensor_msgs/Image
     qos_class: bulk
     imgResizeRate: 0.5
     srcIP:

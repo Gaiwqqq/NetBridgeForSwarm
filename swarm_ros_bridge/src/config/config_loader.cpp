@@ -2,6 +2,8 @@
 
 #include <xmlrpcpp/XmlRpcValue.h>
 
+#include <stdexcept>
+
 namespace swarm_ros_bridge {
 namespace config {
 
@@ -60,9 +62,12 @@ void LoadTopicRules(const XmlRpc::XmlRpcValue& topics, BridgeConfig* config) {
   config->topics.clear();
   for (int i = 0; i < topics.size(); ++i) {
     const XmlRpc::XmlRpcValue& topic_xml = topics[i];
+    if (topic_xml.hasMember("msg_type")) {
+      throw std::invalid_argument(
+          "msg_type is no longer supported; topic types are discovered automatically");
+    }
     TopicRule rule;
     rule.topic_name = GetString(topic_xml["topic_name"]);
-    rule.msg_type = GetString(topic_xml["msg_type"]);
     LoadHosts(topic_xml["srcIP"], &rule.src_hosts);
     LoadHosts(topic_xml["dstIP"], &rule.dst_hosts);
     if (topic_xml.hasMember("qos_class")) {

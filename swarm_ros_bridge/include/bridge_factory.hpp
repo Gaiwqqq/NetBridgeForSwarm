@@ -5,6 +5,7 @@
 #include "swarm_ros_bridge/NetworkArray.h"
 #include "topic_factory.h"
 #include "transport/bridge_transport.hpp"
+#include "transport/topic_schema_registry.hpp"
 
 #include <ros/ros.h>
 
@@ -47,6 +48,8 @@ class BridgeFactory {
   std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> control_transport_;
   std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> image_transport_;
   std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> cloud_transport_;
+  std::shared_ptr<swarm_ros_bridge::transport::TopicSchemaRegistry>
+      schema_registry_;
   ros::Publisher diagnostics_pub_;
   ros::Timer diagnostics_timer_;
   bool stopped_{false};
@@ -56,8 +59,6 @@ class BridgeFactory {
   void getServiceConfigAndInit();
   void topicOperatorInit();
   void publishDiagnostics(const ros::TimerEvent& event);
-  std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport> transportForTopic(
-      const TopicCfg& topic) const;
   void expandHostSelection(const XmlRpc::XmlRpcValue& selection,
                            std::map<std::string, bool>* output) const;
 };

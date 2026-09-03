@@ -185,7 +185,7 @@ class ZenohTransport::Impl : public std::enable_shared_from_this<ZenohTransport:
       presence_options.history = true;
       liveliness_subscriber_ = std::make_unique<zenoh::Subscriber<void>>(
           session_->liveliness_declare_subscriber(
-              zenoh::KeyExpr("netbridge/v1/alive/*"),
+              zenoh::KeyExpr("netbridge/v2/alive/*"),
               [this](const zenoh::Sample& sample) {
                 std::string discovered_hostname;
                 if (!ParseAliveKey(

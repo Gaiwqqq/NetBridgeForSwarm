@@ -159,8 +159,8 @@ ftxui::Element RenderOverviewScreen(
         return item.msg_type != "transport" && item.msg_type != "presence";
       });
   const auto cloud_topics =
-      std::count_if(config.topics.begin(), config.topics.end(),
-                    [](const config::TopicRule& topic) {
+      std::count_if(live_snapshot.begin(), live_snapshot.end(),
+                    [](const swarm_ros_bridge::NetworkInfo& topic) {
                       return topic.msg_type == "sensor_msgs/PointCloud2";
                     });
 

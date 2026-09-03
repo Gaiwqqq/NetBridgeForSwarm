@@ -18,6 +18,9 @@ struct TopicMetrics {
   std::string codec;
   std::string transport;
   std::string qos_class;
+  std::string schema_state{"discovering"};
+  std::string schema_md5;
+  std::string schema_error;
   double configured_rate_hz{0.0};
   double send_rate_hz{0.0};
   double recv_rate_hz{0.0};
@@ -51,6 +54,9 @@ struct TopicRuntimeState {
   std::string codec;
   std::string transport;
   std::string qos_class;
+  std::string schema_state{"discovering"};
+  std::string schema_md5;
+  std::string schema_error;
   double configured_rate_hz{0.0};
   std::size_t total_sent{0};
   std::size_t total_received{0};

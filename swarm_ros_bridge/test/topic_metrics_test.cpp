@@ -19,6 +19,9 @@ int main() {
   state.topic_name = "/camera";
   state.msg_type = "sensor_msgs/Image";
   state.direction = "recv";
+  state.schema_state = "ready";
+  state.schema_md5 = "060021388200f6f0f447d0fcd9c64743";
+  state.schema_error.clear();
   state.rate_window_sec = 3.0;
 
   diagnostics::ObserveCompleteFrameSequence(10, &state);
@@ -41,6 +44,9 @@ int main() {
   assert(Near(metrics.complete_frame_success_rate_pct, 40.0));
   assert(Near(metrics.effective_recv_bandwidth_kbps, 24.0));
   assert(metrics.decoded_frames == 2U);
+  assert(metrics.schema_state == "ready");
+  assert(metrics.schema_md5 == state.schema_md5);
+  assert(metrics.schema_error.empty());
 
   diagnostics::ObserveCompleteFrameSequence(1, &state);  // sender restart
   assert(state.sequence_resets == 1U);

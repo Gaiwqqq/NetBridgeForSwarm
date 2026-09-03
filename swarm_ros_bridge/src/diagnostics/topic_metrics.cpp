@@ -75,6 +75,9 @@ TopicMetrics MakeTopicMetrics(const TopicRuntimeState& state, const ros::Time& n
   metrics.codec = state.codec;
   metrics.transport = state.transport;
   metrics.qos_class = state.qos_class;
+  metrics.schema_state = state.schema_state;
+  metrics.schema_md5 = state.schema_md5;
+  metrics.schema_error = state.schema_error;
   metrics.configured_rate_hz = state.configured_rate_hz;
 
   const ros::Time send_window_start =

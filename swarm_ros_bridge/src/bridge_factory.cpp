@@ -63,18 +63,6 @@ bool UsesEndpointProtocol(const std::string& endpoint,
   return endpoint.rfind(protocol + "/", 0) == 0;
 }
 
-std::string TopicTransportName(bool image_session_enabled,
-                               bool cloud_session_enabled,
-                               const std::string& ros_type) {
-  if (image_session_enabled && ros_type == "sensor_msgs/Image") {
-    return "zenoh-udp";
-  }
-  if (cloud_session_enabled && ros_type == "sensor_msgs/PointCloud2") {
-    return "zenoh-cloud-tcp";
-  }
-  return image_session_enabled || cloud_session_enabled ? "zenoh-tcp" : "zenoh";
-}
-
 void ValidateEndpointProtocols(const std::vector<std::string>& endpoints,
                                const std::string& protocol,
                                const std::string& config_name) {
@@ -119,6 +107,8 @@ BridgeFactory::BridgeFactory(ros::NodeHandle& node,
         std::make_shared<swarm_ros_bridge::transport::ZenohTransport>(
             cloud_zenoh_config_, my_hostname_);
   }
+  schema_registry_ =
+      std::make_shared<swarm_ros_bridge::transport::TopicSchemaRegistry>();
 
   INFO_MSG_GREEN(">>>>>>>>>>>>>>>>>>>>> Topic List >>>>>>>>>>>>>>>>>>>>>>");
   topicOperatorInit();
@@ -458,8 +448,12 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
     if (topic_xml.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
       throw std::invalid_argument("each topic entry must be a struct");
     }
+    if (topic_xml.hasMember("msg_type")) {
+      throw std::invalid_argument(
+          "msg_type is no longer supported; remove it from topic entry " +
+          std::to_string(i));
+    }
     const std::string topic_name = static_cast<std::string>(topic_xml["topic_name"]);
-    const std::string topic_type = static_cast<std::string>(topic_xml["msg_type"]);
     if (topic_name.empty() || topic_name.front() != '/') {
       throw std::invalid_argument("topic_name must start with '/': " + topic_name);
     }
@@ -477,8 +471,10 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
     TopicCfg topic;
     topic.my_hostname_ = my_hostname_;
     topic.name_ = topic_name;
+    topic.fanout_name_ = topic_name;
+    topic.directed_name_ = topic_name;
     topic.wire_name_ = topic_name;
-    topic.type_ = topic_type;
+    topic.rule_id_ = std::to_string(i) + ":" + topic_name;
     topic.qos_class_ = qos_class;
     topic.max_freq_ = XmlRpcToDouble(topic_xml["max_freq"], 10.0);
     topic.has_prefix_ = topic_xml.hasMember("prefix")
@@ -494,75 +490,76 @@ void BridgeFactory::getHostTopicAndTransportConfig() {
     expandHostSelection(topic.src_hostnames_xml, &topic.src_hostname_map_);
     expandHostSelection(topic.dst_hostnames_xml, &topic.dst_hostname_map_);
 
-    if (topic_type == "sensor_msgs/Image") {
-      if (topic_xml.hasMember("imgResizeRate")) {
-        topic.img_resize_rate_ =
-            XmlRpcToDouble(topic_xml["imgResizeRate"], topic.img_resize_rate_);
-      }
-      if (topic_xml.hasMember("imgJpegQuality")) {
-        topic.img_jpeg_quality_ =
-            std::max(10, std::min(100, XmlRpcToInt(topic_xml["imgJpegQuality"], 80)));
-      }
-      if (topic_xml.hasMember("imgAdaptiveQuality")) {
-        topic.img_adaptive_quality_ =
-            XmlRpcToBool(topic_xml["imgAdaptiveQuality"], false);
-      }
-      if (topic_xml.hasMember("imgMinJpegQuality")) {
-        topic.img_min_jpeg_quality_ = XmlRpcToInt(topic_xml["imgMinJpegQuality"], 45);
-      }
-      if (topic_xml.hasMember("imgMaxJpegQuality")) {
-        topic.img_max_jpeg_quality_ = XmlRpcToInt(topic_xml["imgMaxJpegQuality"], 90);
-      }
-      if (topic_xml.hasMember("imgTargetBandwidthKbps")) {
-        topic.img_target_bandwidth_kbps_ =
-            XmlRpcToDouble(topic_xml["imgTargetBandwidthKbps"], 1200.0);
-      }
-      if (topic_xml.hasMember("imgQualityStep")) {
-        topic.img_quality_step_ =
-            std::max(1, XmlRpcToInt(topic_xml["imgQualityStep"], 5));
-      }
-      if (topic_xml.hasMember("imgAdaptCooldownFrames")) {
-        topic.img_adapt_cooldown_frames_ =
-            std::max(1, XmlRpcToInt(topic_xml["imgAdaptCooldownFrames"], 8));
-      }
-      topic.img_min_jpeg_quality_ =
-          std::max(10, std::min(100, topic.img_min_jpeg_quality_));
-      topic.img_max_jpeg_quality_ = std::max(
-          topic.img_min_jpeg_quality_, std::min(100, topic.img_max_jpeg_quality_));
+    if (topic_xml.hasMember("imgResizeRate")) {
+      topic.img_resize_rate_ =
+          XmlRpcToDouble(topic_xml["imgResizeRate"], topic.img_resize_rate_);
     }
-    if (topic_type == "sensor_msgs/PointCloud2") {
-      if (topic_xml.hasMember("cloudCompress")) {
-        topic.cloud_compress_ = XmlRpcToBool(topic_xml["cloudCompress"], false);
-      }
-      if (topic_xml.hasMember("cloudDownsample")) {
-        topic.cloud_downsample_ =
-            XmlRpcToDouble(topic_xml["cloudDownsample"], -1.0);
-        if (topic.cloud_downsample_ < 1e-4 || topic.cloud_downsample_ > 1e4) {
-          topic.cloud_downsample_ = -1.0;
-        }
-      }
-      topic.cloud_codec_ = topic_xml.hasMember("cloudCodec")
-                               ? XmlRpcToString(topic_xml["cloudCodec"], "raw")
-                               : (topic.cloud_compress_ ? "pcl_octree" : "raw");
-      if (topic.cloud_compress_ && topic.cloud_codec_ != "draco" &&
-          topic.cloud_codec_ != "pcl_octree") {
-        throw std::invalid_argument("cloudCodec must be draco or pcl_octree");
+    if (topic_xml.hasMember("imgJpegQuality")) {
+      topic.img_jpeg_quality_ =
+          std::max(10, std::min(100, XmlRpcToInt(topic_xml["imgJpegQuality"], 80)));
+    }
+    if (topic_xml.hasMember("imgAdaptiveQuality")) {
+      topic.img_adaptive_quality_ =
+          XmlRpcToBool(topic_xml["imgAdaptiveQuality"], false);
+    }
+    if (topic_xml.hasMember("imgMinJpegQuality")) {
+      topic.img_min_jpeg_quality_ = XmlRpcToInt(topic_xml["imgMinJpegQuality"], 45);
+    }
+    if (topic_xml.hasMember("imgMaxJpegQuality")) {
+      topic.img_max_jpeg_quality_ = XmlRpcToInt(topic_xml["imgMaxJpegQuality"], 90);
+    }
+    if (topic_xml.hasMember("imgTargetBandwidthKbps")) {
+      topic.img_target_bandwidth_kbps_ =
+          XmlRpcToDouble(topic_xml["imgTargetBandwidthKbps"], 1200.0);
+    }
+    if (topic_xml.hasMember("imgQualityStep")) {
+      topic.img_quality_step_ =
+          std::max(1, XmlRpcToInt(topic_xml["imgQualityStep"], 5));
+    }
+    if (topic_xml.hasMember("imgAdaptCooldownFrames")) {
+      topic.img_adapt_cooldown_frames_ =
+          std::max(1, XmlRpcToInt(topic_xml["imgAdaptCooldownFrames"], 8));
+    }
+    topic.img_min_jpeg_quality_ =
+        std::max(10, std::min(100, topic.img_min_jpeg_quality_));
+    topic.img_max_jpeg_quality_ = std::max(
+        topic.img_min_jpeg_quality_, std::min(100, topic.img_max_jpeg_quality_));
+    if (topic_xml.hasMember("cloudCompress")) {
+      topic.cloud_compress_ = XmlRpcToBool(topic_xml["cloudCompress"], false);
+    }
+    if (topic_xml.hasMember("cloudDownsample")) {
+      topic.cloud_downsample_ =
+          XmlRpcToDouble(topic_xml["cloudDownsample"], -1.0);
+      if (topic.cloud_downsample_ < 1e-4 || topic.cloud_downsample_ > 1e4) {
+        topic.cloud_downsample_ = -1.0;
       }
     }
-
-    bool has_ids_member = false;
-#define X(type, classname)                                                   \
-  if constexpr (has_data_to_drone_ids<classname, std::vector<uint8_t>>::value) { \
-    has_ids_member = has_ids_member || topic.type_ == type;                  \
-  }
-    MSGS_MACRO
-#undef X
-    topic.dynamic_dst_ = has_ids_member;
+    topic.cloud_codec_ = topic_xml.hasMember("cloudCodec")
+                             ? XmlRpcToString(topic_xml["cloudCodec"], "raw")
+                             : (topic.cloud_compress_ ? "pcl_octree" : "raw");
+    if (topic.cloud_compress_ && topic.cloud_codec_ != "draco" &&
+        topic.cloud_codec_ != "pcl_octree") {
+      throw std::invalid_argument("cloudCodec must be draco or pcl_octree");
+    }
     topic_cfgs_.push_back(std::move(topic));
   }
 }
 
 void BridgeFactory::topicOperatorInit() {
+  const TopicTransports transports{control_transport_, image_transport_,
+                                   cloud_transport_};
+  const auto add_receive_prefix = [](const TopicCfg& topic,
+                                     const std::string& source,
+                                     const std::string& base_name) {
+    if (topic.same_prefix_) {
+      return std::string("/bridge") + base_name;
+    }
+    if (topic.has_prefix_) {
+      return "/" + source + base_name;
+    }
+    return base_name;
+  };
+
   for (const TopicCfg& configured : topic_cfgs_) {
     TopicCfg topic = configured;
     if (!topic.src_hostname_map_[my_hostname_]) {
@@ -574,12 +571,11 @@ void BridgeFactory::topicOperatorInit() {
       topic.name_.replace(0, drone_prefix.size(),
                           "/drone_" + std::to_string(my_drone_id_));
     }
-    topic.raw_name_ = nh_->resolveName(topic.name_);
     topic.src_hostname_ = my_hostname_;
-    topic.transport_name_ = TopicTransportName(
-        image_session_enabled_, cloud_session_enabled_, topic.type_);
-    send_topics_[topic.name_] = std::make_shared<TopicFactory>(
-        topic, transportForTopic(topic), TopicFactory::SEND, nh_public_);
+    topic.fanout_name_ = topic.name_;
+    topic.directed_name_ = topic.name_;
+    send_topics_[topic.rule_id_] = std::make_shared<TopicFactory>(
+        topic, transports, schema_registry_, TopicFactory::SEND, nh_public_);
   }
 
   for (const TopicCfg& configured : topic_cfgs_) {
@@ -595,58 +591,38 @@ void BridgeFactory::topicOperatorInit() {
       }
       TopicCfg topic = configured;
       const std::string drone_prefix = "/drone_{id}";
-      if (topic.name_.rfind(drone_prefix, 0) == 0) {
+      std::string fanout_base = topic.name_;
+      std::string directed_base = topic.name_;
+      if (fanout_base.rfind(drone_prefix, 0) == 0) {
         if (source.first.rfind("drone", 0) != 0) {
           throw std::invalid_argument("{id} topic source must be a drone host");
         }
-        const int drone_id = topic.dynamic_dst_
-                                 ? my_drone_id_
-                                 : std::stoi(source.first.substr(5));
-        topic.name_.replace(0, drone_prefix.size(),
-                            "/drone_" + std::to_string(drone_id));
+        const int source_drone_id = std::stoi(source.first.substr(5));
+        fanout_base.replace(0, drone_prefix.size(),
+                            "/drone_" + std::to_string(source_drone_id));
+        if (my_drone_id_ == DRONE_ID_NULL) {
+          directed_base.clear();
+        } else {
+          directed_base.replace(0, drone_prefix.size(),
+                                "/drone_" + std::to_string(my_drone_id_));
+        }
       }
-      topic.raw_name_ = nh_->resolveName(topic.name_);
-      if (topic.has_prefix_ && !topic.same_prefix_) {
-        topic.name_ = "/" + source.first + topic.name_;
-      } else if (topic.same_prefix_) {
-        topic.name_ = "/bridge" + topic.name_;
-      }
+      topic.fanout_name_ =
+          add_receive_prefix(topic, source.first, fanout_base);
+      topic.directed_name_ = directed_base.empty()
+                                 ? std::string()
+                                 : add_receive_prefix(topic, source.first,
+                                                      directed_base);
+      topic.name_ = topic.fanout_name_;
       topic.src_hostname_ = source.first;
-      topic.transport_name_ = TopicTransportName(
-          image_session_enabled_, cloud_session_enabled_, topic.type_);
-      if (recv_topics_.find(topic.name_) != recv_topics_.end()) {
-        throw std::invalid_argument("duplicate receive ROS topic: " + topic.name_);
-      }
-      recv_topics_[topic.name_] = std::make_shared<TopicFactory>(
-          topic, transportForTopic(topic), TopicFactory::RECV, nh_public_);
-      if (topic.dynamic_dst_) {
-        break;
-      }
+      const std::string receiver_key = topic.rule_id_ + "|" + source.first;
+      recv_topics_[receiver_key] = std::make_shared<TopicFactory>(
+          topic, transports, schema_registry_, TopicFactory::RECV, nh_public_);
     }
   }
   INFO_MSG_GREEN("[Bridge] send topics: " << send_topics_.size()
                                            << ", receive topics: "
                                            << recv_topics_.size());
-}
-
-std::shared_ptr<swarm_ros_bridge::transport::BridgeTransport>
-BridgeFactory::transportForTopic(const TopicCfg& topic) const {
-  if (image_session_enabled_ && topic.type_ == "sensor_msgs/Image") {
-    if (image_transport_ == nullptr) {
-      throw std::runtime_error("image Zenoh session is not initialized");
-    }
-    return image_transport_;
-  }
-  if (cloud_session_enabled_ && topic.type_ == "sensor_msgs/PointCloud2") {
-    if (cloud_transport_ == nullptr) {
-      throw std::runtime_error("cloud Zenoh session is not initialized");
-    }
-    return cloud_transport_;
-  }
-  if (control_transport_ == nullptr) {
-    throw std::runtime_error("control Zenoh session is not initialized");
-  }
-  return control_transport_;
 }
 
 void BridgeFactory::getServiceConfigAndInit() {
@@ -777,6 +753,9 @@ void BridgeFactory::publishDiagnostics(const ros::TimerEvent&) {
     info.codec = metrics.codec;
     info.transport = metrics.transport;
     info.qos_class = metrics.qos_class;
+    info.schema_state = metrics.schema_state;
+    info.schema_md5 = metrics.schema_md5;
+    info.schema_error = metrics.schema_error;
     info.configured_rate_hz = static_cast<float>(metrics.configured_rate_hz);
     info.send_rate_hz = static_cast<float>(metrics.send_rate_hz);
     info.recv_rate_hz = static_cast<float>(metrics.recv_rate_hz);

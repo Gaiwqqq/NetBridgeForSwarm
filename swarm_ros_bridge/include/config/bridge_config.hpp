@@ -10,7 +10,6 @@ namespace config {
 
 struct TopicRule {
   std::string topic_name;
-  std::string msg_type;
   std::vector<std::string> src_hosts;
   std::vector<std::string> dst_hosts;
   std::string qos_class{"state"};
